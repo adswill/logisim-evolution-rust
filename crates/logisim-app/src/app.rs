@@ -1,6 +1,7 @@
 //! The egui application: panels, canvas interaction, simulation control and file handling.
 //! Document logic lives in `model`; this file turns input into model calls and draws.
 
+use crate::analyze_ui::{self, AnalyzerWindow};
 use crate::examples;
 use crate::model::{Editor, Sel, P};
 use crate::nets::NetAnalysis;
@@ -136,6 +137,7 @@ pub struct App {
     point_net: HashMap<P, usize>,
     hover_net: Option<usize>,
     title_sent: String,
+    analyzer: AnalyzerWindow,
 }
 
 impl App {
@@ -170,6 +172,7 @@ impl App {
             point_net: HashMap::new(),
             hover_net: None,
             title_sent: String::new(),
+            analyzer: AnalyzerWindow::new(),
         };
         if example {
             app.load_example();
@@ -1200,6 +1203,12 @@ impl App {
                     ui.close();
                 }
             });
+            ui.menu_button("Tools", |ui| {
+                if ui.button("Combinational Analysis…").clicked() {
+                    self.analyzer.open();
+                    ui.close();
+                }
+            });
             ui.menu_button("Help", |ui| {
                 if ui.button("About").clicked() {
                     self.status = "rcirc: a beginner-friendly Rust port of Logisim Evolution (GPL-3.0-or-later).".into();
@@ -1556,6 +1565,19 @@ impl App {
         ui.weak("Select a part to edit its attributes.");
     }
 
+    /// The Combinational Analysis window; a circuit it builds is added to the project.
+    fn show_analyzer(&mut self, ctx: &egui::Context) {
+        let dark = self.mode == ThemeMode::Dark;
+        let action = self
+            .analyzer
+            .show(ctx, dark, &self.ed.project, &self.ed.current);
+        if let Some(analyze_ui::Action::AddCircuit(def)) = action {
+            let name = self.ed.add_circuit_def(def);
+            self.ed.open_circuit(&name);
+            self.status = format!("Added circuit '{name}' from the analysis window.");
+        }
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(&self.status);
@@ -1602,5 +1624,6 @@ impl eframe::App for App {
             .default_size(240.0)
             .show(ui, |ui| self.attributes(ui));
         egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
+        self.show_analyzer(&ctx);
     }
 }

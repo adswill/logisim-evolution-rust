@@ -1,3 +1,4 @@
+mod analyze_ui;
 mod app;
 mod examples;
 mod model;

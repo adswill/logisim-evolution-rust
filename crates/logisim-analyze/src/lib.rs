@@ -3,6 +3,7 @@
 //! window, without any user interface.
 
 pub mod build;
+pub mod csv;
 pub mod expr;
 pub mod from_circuit;
 pub mod implicant;
