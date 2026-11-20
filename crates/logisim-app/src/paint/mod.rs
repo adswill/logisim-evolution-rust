@@ -268,6 +268,10 @@ impl Gfx<'_> {
     }
     /// Upright text (never rotated) anchored at a local point.
     pub fn text(&self, at: (f32, f32), anchor: Align2, s: &str, size: f32, color: Color32) {
+        // illegible at this zoom (also the case in toolbox icons): leave it out
+        if size * self.view.zoom < 5.5 {
+            return;
+        }
         let fid = FontId::proportional((size * self.view.zoom).clamp(6.0, 60.0));
         self.painter
             .text(self.p(at.0, at.1), anchor, s, fid, self.col(color));
@@ -374,6 +378,54 @@ pub fn world_bounds(def: &ComponentDef, v: &PartView) -> Rect {
         r.extend_with(Pos2::new(def.at.0 as f32 + rx, def.at.1 as f32 + ry));
     }
     r
+}
+
+/// Draw a small icon of library part `library`/`part` (default options, facing east) so that it
+/// fits `rect`, centred. Used by the toolbox next to each part name. Returns `false` when the
+/// part is unknown or cannot be built (e.g. a subcircuit): draw your own fallback then.
+/// Building the part each call is cheap but not free: for long lists, call it only for visible rows.
+pub fn paint_icon(
+    painter: &egui::Painter,
+    rect: Rect,
+    theme: &Theme,
+    library: &str,
+    part: &str,
+) -> bool {
+    let Ok(def) = ComponentDef::new(library, part, 0, 0) else {
+        return false;
+    };
+    let Ok(comp) = def.build() else {
+        return false;
+    };
+    let ports = comp.ports();
+    let v = PartView {
+        def: &def,
+        name: part,
+        ports: &ports,
+        port_vals: &[],
+        selected: false,
+        port_names: &[],
+    };
+    let p = painter_for(library, part);
+    let b = p.bounds(&v);
+    let (w, h) = ((b.2 - b.0).max(1.0), (b.3 - b.1).max(1.0));
+    let zoom = (rect.width() / w).min(rect.height() / h);
+    let c = rect.center();
+    let origin = Vec2::new(
+        c.x - (b.0 + b.2) / 2.0 * zoom,
+        c.y - (b.1 + b.3) / 2.0 * zoom,
+    );
+    let painter = painter.with_clip_rect(rect.expand(1.0));
+    let g = Gfx {
+        painter: &painter,
+        view: View { origin, zoom },
+        theme,
+        at: (0, 0),
+        facing: Direction::East,
+        alpha: 1.0,
+    };
+    p.paint(&g, &v);
+    true
 }
 
 // ---- registry --------------------------------------------------------------------------------

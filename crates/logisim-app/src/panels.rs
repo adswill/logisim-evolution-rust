@@ -281,8 +281,15 @@ impl App {
                     );
                 }
                 let text = vis.text_color();
+                // small picture of the part, like the icons in Logisim's toolbox
+                let icon = egui::Rect::from_center_size(
+                    rect.left_center() + egui::vec2(18.0, 0.0),
+                    egui::vec2(28.0, 22.0),
+                );
+                let th = crate::paint::Theme::new(self.mode);
+                crate::paint::paint_icon(ui.painter(), icon, &th, &p.library, &p.name);
                 ui.painter().text(
-                    rect.left_center() + egui::vec2(10.0, 0.0),
+                    rect.left_center() + egui::vec2(38.0, 0.0),
                     Align2::LEFT_CENTER,
                     &p.name,
                     egui::TextStyle::Body.resolve(ui.style()),

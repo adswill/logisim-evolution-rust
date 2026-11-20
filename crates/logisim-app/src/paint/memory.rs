@@ -40,7 +40,7 @@ pub fn painter(part: &str) -> Option<&'static dyn PartPainter> {
                 (4, "ld"),
                 (5, "↕"),
                 (6, "en"),
-                (7, "co"),
+                (7, "ct"),
             ],
         },
         "Random" => &Boxed {
