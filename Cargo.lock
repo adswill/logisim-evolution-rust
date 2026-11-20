@@ -2771,6 +2771,7 @@ dependencies = [
  "logisim-components",
  "logisim-core",
  "logisim-format",
+ "logisim-log",
  "rfd",
  "ron",
  "serde",
