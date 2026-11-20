@@ -1,7 +1,7 @@
 //! The Gates library: AND, OR, NAND, NOR, XOR, XNOR, NOT, Buffer, controlled buffer/inverter.
 //! Port layout matches Logisim: port 0 is the output at (0,0); inputs are 1..=n on the left.
 
-use logisim_core::{BitWidth, Component, Direction, Location, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, Direction, Location, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use crate::registry::{Library, PartDesc};
 
@@ -189,6 +189,11 @@ pub fn input_offset(o: &GateOptions, kind: GateKind, index: usize) -> Location {
     Location::new(-dx, dy)
 }
 
+const XOR_MODES: [(&str, XorMode); 2] = [("odd", XorMode::Odd), ("one", XorMode::ExactlyOne)];
+const OUTPUT_MODES: [(&str, OutputMode); 3] =
+    [("normal", OutputMode::Normal), ("zero_float", OutputMode::ZeroOrFloat), ("float_one", OutputMode::FloatOrOne)];
+const UNDEFINED: [(&str, UndefinedPolicy); 2] = [("ignore", UndefinedPolicy::Ignore), ("error", UndefinedPolicy::Error)];
+
 pub struct Gate {
     kind: GateKind,
     opts: GateOptions,
@@ -245,6 +250,38 @@ impl Component for Gate {
             GateKind::Xor => "XOR Gate",
             GateKind::Xnor => "XNOR Gate",
         }
+    }
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("inputs", o.inputs)
+            .with("width", o.width.get())
+            .with("negated", o.negated as i64)
+            .with("size", o.size)
+            .with("xor_mode", OptionMap::name_of(o.xor_mode, &XOR_MODES))
+            .with("output", OptionMap::name_of(o.output, &OUTPUT_MODES))
+            .with("undefined", OptionMap::name_of(o.undefined, &UNDEFINED))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["inputs", "width", "negated", "size", "xor_mode", "output", "undefined"])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("inputs", 2, 64)? {
+            o.inputs = v as usize;
+        }
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("negated", i64::MIN, i64::MAX)? {
+            o.negated = v as u64;
+        }
+        if let Some(v) = m.int("size", 30, 70)? {
+            o.size = v as i32;
+        }
+        o.xor_mode = m.choice("xor_mode", &XOR_MODES)?.unwrap_or(o.xor_mode);
+        o.output = m.choice("output", &OUTPUT_MODES)?.unwrap_or(o.output);
+        o.undefined = m.choice("undefined", &UNDEFINED)?.unwrap_or(o.undefined);
+        self.opts = o;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let mut p = vec![Port::new(0, 0, PortKind::Output, self.opts.width)];
@@ -308,6 +345,17 @@ impl Component for Buffer {
         } else {
             "Buffer"
         }
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get()).with("undefined", OptionMap::name_of(self.undefined, &UNDEFINED))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "undefined"])?;
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        self.undefined = m.choice("undefined", &UNDEFINED)?.unwrap_or(self.undefined);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         // NOT has a bubble, so its input sits 10 further out (30 vs 20 at medium size)
@@ -381,6 +429,17 @@ impl Component for ControlledBuffer {
         } else {
             "Controlled Buffer"
         }
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get()).with("undefined", OptionMap::name_of(self.undefined, &UNDEFINED))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "undefined"])?;
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        self.undefined = m.choice("undefined", &UNDEFINED)?.unwrap_or(self.undefined);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let x = if self.inverting { -30 } else { -20 };
@@ -629,6 +688,22 @@ mod tests {
         rh.set(Value::FALSE);
         c.refresh(r);
         assert_eq!(q(&mut c), (Value::FALSE, Value::TRUE));
+    }
+
+    #[test]
+    fn options_round_trip() {
+        let mut g = Gate::xor(GateOptions::default());
+        let o = OptionMap::new().with("inputs", 3).with("width", 4).with("xor_mode", "one").with("negated", 2);
+        g.set_options(&o).unwrap();
+        assert_eq!(g.ports().len(), 4);
+        let saved = g.options();
+        assert_eq!(saved.int("inputs", 0, 99), Ok(Some(3)));
+        assert_eq!(saved.string("xor_mode"), Ok(Some("one")));
+        let mut h = Gate::xor(GateOptions::default());
+        h.set_options(&saved).unwrap();
+        assert_eq!(h.options(), saved);
+        assert!(g.set_options(&OptionMap::new().with("inputs", 1)).is_err());
+        assert!(g.set_options(&OptionMap::new().with("bogus", 1)).is_err());
     }
 
     #[test]

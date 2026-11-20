@@ -4,7 +4,7 @@
 //! Ports are listed for the east-facing orientation; `Circuit` rotates them.
 
 use crate::registry::{Library, PartDesc};
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -60,6 +60,18 @@ impl Component for Pin {
     fn name(&self) -> &str {
         "Pin"
     }
+    fn options(&self) -> OptionMap {
+        let v = self.value.get();
+        OptionMap::new().with("width", v.width().get()).with("value", v.to_u64().unwrap_or(0) as i64)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "value"])?;
+        let cur = self.value.get();
+        let width = m.int("width", 1, 64)?.map_or(cur.width(), |v| BitWidth::new(v as u8));
+        let value = m.int("value", i64::MIN, i64::MAX)?.map_or(cur.to_u64().unwrap_or(0), |v| v as u64);
+        self.value.set(Value::known(width, value));
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::Output, self.value.get().width())]
     }
@@ -107,6 +119,17 @@ impl Clock {
 impl Component for Clock {
     fn name(&self) -> &str {
         "Clock"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("high", self.high).with("low", self.low).with("phase", self.phase)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["high", "low", "phase"])?;
+        let high = m.int("high", 1, u32::MAX as i64)?.map_or(self.high, |v| v as u32);
+        let low = m.int("low", 1, u32::MAX as i64)?.map_or(self.low, |v| v as u32);
+        let phase = m.int("phase", i64::MIN, i64::MAX)?.unwrap_or(self.phase);
+        *self = Clock::new(high, low, phase);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::Output, BitWidth::ONE)]
@@ -230,9 +253,47 @@ impl Splitter {
     }
 }
 
+const APPEARANCES: [(&str, SplitterAppearance); 4] = [
+    ("left", SplitterAppearance::Left),
+    ("right", SplitterAppearance::Right),
+    ("center", SplitterAppearance::Center),
+    ("legacy", SplitterAppearance::Legacy),
+];
+
 impl Component for Splitter {
     fn name(&self) -> &str {
         "Splitter"
+    }
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        let bit_end: Vec<String> = o.bit_end.iter().map(|e| e.to_string()).collect();
+        OptionMap::new()
+            .with("fanout", o.fanout)
+            .with("width", o.width)
+            .with("spacing", o.spacing)
+            .with("appearance", OptionMap::name_of(o.appearance, &APPEARANCES))
+            .with("bit_end", bit_end.join(","))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["fanout", "width", "spacing", "appearance", "bit_end"])?;
+        let fanout = m.int("fanout", 1, 64)?.map_or(self.opts.fanout, |v| v as usize);
+        let width = m.int("width", 1, 64)?.map_or(self.opts.width, |v| v as u8);
+        let mut o = SplitterOptions::new(fanout, width);
+        if fanout == self.opts.fanout && width == self.opts.width {
+            o.bit_end = self.opts.bit_end.clone();
+        }
+        o.spacing = m.int("spacing", 1, 8)?.map_or(self.opts.spacing, |v| v as i32);
+        o.appearance = m.choice("appearance", &APPEARANCES)?.unwrap_or(self.opts.appearance);
+        if let Some(s) = m.string("bit_end")? {
+            let parsed: Result<Vec<u8>, _> = s.split(',').map(|t| t.trim().parse::<u8>()).collect();
+            let be = parsed.map_err(|e| format!("option 'bit_end': {e}"))?;
+            if be.len() != width as usize || be.iter().any(|&e| e as usize > fanout) {
+                return Err(format!("option 'bit_end' needs {width} entries, each in 0..={fanout}"));
+            }
+            o.bit_end = be;
+        }
+        self.opts = o;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let mut p = vec![Port::new(0, 0, PortKind::InOut, bw(self.opts.width))];
@@ -291,6 +352,19 @@ impl Component for Tunnel {
     fn name(&self) -> &str {
         "Tunnel"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("name", self.name.as_str()).with("width", self.width.get())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["name", "width"])?;
+        if let Some(n) = m.string("name")? {
+            self.name = n.to_string();
+        }
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::InOut, self.width)]
     }
@@ -305,6 +379,8 @@ pub struct PullResistor {
     pub pull: Value,
 }
 
+const PULLS: [(&str, Value); 3] = [("down", Value::FALSE), ("up", Value::TRUE), ("error", Value::ERROR)];
+
 impl PullResistor {
     pub fn new(pull: Value) -> Self {
         assert!(pull == Value::TRUE || pull == Value::FALSE || pull == Value::ERROR);
@@ -315,6 +391,14 @@ impl PullResistor {
 impl Component for PullResistor {
     fn name(&self) -> &str {
         "Pull Resistor"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("pull", OptionMap::name_of(self.pull, &PULLS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["pull"])?;
+        self.pull = m.choice("pull", &PULLS)?.unwrap_or(self.pull);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::InOut, Port::ANY_WIDTH)]
@@ -376,6 +460,19 @@ impl Component for Constant {
     fn name(&self) -> &str {
         "Constant"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get()).with("value", self.value as i64)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "value"])?;
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("value", i64::MIN, i64::MAX)? {
+            self.value = v as u64;
+        }
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::Output, self.width)]
     }
@@ -397,6 +494,16 @@ impl Component for Power {
     fn name(&self) -> &str {
         "Power"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width"])?;
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::Output, self.width)]
     }
@@ -417,6 +524,16 @@ impl Ground {
 impl Component for Ground {
     fn name(&self) -> &str {
         "Ground"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width"])?;
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::Output, self.width)]
@@ -452,6 +569,8 @@ pub struct Transistor {
     pub select_top_right: bool,
 }
 
+const TRANSISTOR_TYPES: [(&str, TransistorType); 2] = [("p", TransistorType::P), ("n", TransistorType::N)];
+
 impl Transistor {
     pub fn new(kind: TransistorType, width: u8) -> Self {
         Transistor { kind, width: bw(width), select_top_right: false }
@@ -461,6 +580,21 @@ impl Transistor {
 impl Component for Transistor {
     fn name(&self) -> &str {
         "Transistor"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("type", OptionMap::name_of(self.kind, &TRANSISTOR_TYPES))
+            .with("width", self.width.get())
+            .with("select_top_right", self.select_top_right)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["type", "width", "select_top_right"])?;
+        self.kind = m.choice("type", &TRANSISTOR_TYPES)?.unwrap_or(self.kind);
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        self.select_top_right = m.boolean("select_top_right")?.unwrap_or(self.select_top_right);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         // east facing: dx = -1, dy = 0
@@ -506,6 +640,17 @@ impl Component for TransmissionGate {
     fn name(&self) -> &str {
         "Transmission Gate"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get()).with("select_top_right", self.select_top_right)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "select_top_right"])?;
+        if let Some(v) = m.int("width", 1, 64)? {
+            self.width = BitWidth::new(v as u8);
+        }
+        self.select_top_right = m.boolean("select_top_right")?.unwrap_or(self.select_top_right);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         let (g0, g1) = if self.select_top_right { (-20, 20) } else { (20, -20) };
         vec![
@@ -542,6 +687,13 @@ pub enum ExtendKind {
     Input,
 }
 
+const EXTEND_KINDS: [(&str, ExtendKind); 4] = [
+    ("zero", ExtendKind::Zero),
+    ("one", ExtendKind::One),
+    ("sign", ExtendKind::Sign),
+    ("input", ExtendKind::Input),
+];
+
 pub struct BitExtender {
     pub in_width: BitWidth,
     pub out_width: BitWidth,
@@ -557,6 +709,23 @@ impl BitExtender {
 impl Component for BitExtender {
     fn name(&self) -> &str {
         "Bit Extender"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("in_width", self.in_width.get())
+            .with("out_width", self.out_width.get())
+            .with("kind", OptionMap::name_of(self.kind, &EXTEND_KINDS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["in_width", "out_width", "kind"])?;
+        if let Some(v) = m.int("in_width", 1, 64)? {
+            self.in_width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("out_width", 1, 64)? {
+            self.out_width = BitWidth::new(v as u8);
+        }
+        self.kind = m.choice("kind", &EXTEND_KINDS)?.unwrap_or(self.kind);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let mut p = vec![
@@ -863,6 +1032,31 @@ mod tests {
         assert_eq!(h.get(), Value::TRUE);
         c.tick();
         assert_eq!(h.get(), Value::FALSE);
+    }
+
+    #[test]
+    fn every_part_round_trips_its_options() {
+        for p in &library().parts {
+            let part = (p.make)();
+            let saved = part.options();
+            let mut fresh = (p.make)();
+            fresh.set_options(&saved).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+            assert_eq!(fresh.options(), saved, "{}", p.name);
+            assert_eq!(fresh.ports(), part.ports(), "{}", p.name);
+        }
+    }
+
+    #[test]
+    fn splitter_and_clock_options() {
+        let mut s = Splitter::new(SplitterOptions::default());
+        let o = OptionMap::new().with("fanout", 3).with("width", 6).with("appearance", "center").with("bit_end", "1,1,2,2,3,3");
+        s.set_options(&o).unwrap();
+        assert_eq!(s.ports().len(), 4);
+        assert_eq!(s.ports()[1].width.get(), 2);
+        assert!(s.set_options(&OptionMap::new().with("fanout", 2).with("width", 2).with("bit_end", "1,5")).is_err());
+        let mut c = Clock::default();
+        c.set_options(&OptionMap::new().with("high", 3).with("low", 2)).unwrap();
+        assert_eq!((c.high, c.low), (3, 2));
     }
 
     #[test]
