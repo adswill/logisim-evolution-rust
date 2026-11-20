@@ -1,6 +1,6 @@
 //! Adder, Subtractor, Negator and Absolute value.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, is_absent, negate_bits, raw, sext, WidthOptions};
 
@@ -66,6 +66,12 @@ impl Component for Adder {
     fn name(&self) -> &str {
         "Adder"
     }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m, &[])
+    }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width;
         vec![
@@ -108,6 +114,12 @@ impl Component for Subtractor {
     fn name(&self) -> &str {
         "Subtractor"
     }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m, &[])
+    }
     fn ports(&self) -> Vec<Port> {
         Adder::new(self.opts.clone()).ports()
     }
@@ -143,6 +155,12 @@ impl Negator {
 impl Component for Negator {
     fn name(&self) -> &str {
         "Negator"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m, &[])
     }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width;
@@ -184,6 +202,12 @@ impl Absolute {
 impl Component for Absolute {
     fn name(&self) -> &str {
         "Absolute Value"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m, &[])
     }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width;

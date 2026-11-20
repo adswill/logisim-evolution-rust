@@ -1,6 +1,6 @@
 //! Multiplier, Divider, Exponentiator and Square Root.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, is_absent, raw, sext, undefined_like, Sign, SignOptions, WidthOptions};
 
@@ -125,9 +125,21 @@ impl Multiplier {
     }
 }
 
+const MUL_MODES: [(&str, MulMode); 3] =
+    [("signed", MulMode::Signed), ("signed_unsigned", MulMode::SignedUnsigned), ("unsigned", MulMode::Unsigned)];
+
 impl Component for Multiplier {
     fn name(&self) -> &str {
         "Multiplier"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.width.options().with("mode", OptionMap::name_of(self.opts.mode, &MUL_MODES))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        let mode = m.choice("mode", &MUL_MODES)?.unwrap_or(self.opts.mode);
+        self.opts.width.apply(m, &["mode"])?;
+        self.opts.mode = mode;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width.width;
@@ -205,6 +217,12 @@ impl Divider {
 impl Component for Divider {
     fn name(&self) -> &str {
         "Divider"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m)
     }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width.width;
@@ -315,6 +333,12 @@ impl Component for Exponentiator {
     fn name(&self) -> &str {
         "Exponentiator"
     }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m)
+    }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width.width;
         vec![
@@ -355,6 +379,12 @@ impl SquareRoot {
 impl Component for SquareRoot {
     fn name(&self) -> &str {
         "Square Root"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.options()
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        self.opts.apply(m, &[])
     }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width;

@@ -8,7 +8,7 @@
 //! (-20,20), then inputs. Port 0 is always the primary output at (0,0). Inputs/outputs that are
 //! not wired up are unknown, so they read as NaN and raise `err`.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, raw, sext, Sign};
 use crate::registry::PartDesc;
@@ -96,7 +96,7 @@ fn f32_to_small(f: f32, exp_bits: u32, man_bits: u32) -> u64 {
     if e + bias >= max_exp as i32 {
         return sign | max_exp << man_bits;
     }
-    sign | (((e + bias) as u64) << man_bits) + (q - (1 << man_bits))
+    sign | ((((e + bias) as u64) << man_bits) + (q - (1 << man_bits)))
 }
 
 /// Decode a floating-point `Value` to `f64` (NaN if undefined or of an unsupported width).
@@ -278,128 +278,237 @@ pub enum FpMulMode {
 
 type Pos = (i32, i32);
 
+/// What an [`FpCalc`] computes (the variants with a mode mirror Logisim's mode attribute).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalcKind {
+    Adder,
+    /// `A - B`.
+    Subtractor,
+    Multiplier(FpMulMode),
+    /// Quotient and IEEE remainder.
+    Divider,
+    Negator,
+    Absolute,
+    SquareRoot,
+    Exponentiator(ExpMode),
+    Logarithm(LogMode),
+    MinMax,
+    Round(RoundMode),
+    Trigonometry(TrigMode),
+}
+
+const MUL_MODES: [(&str, FpMulMode); 2] = [("multiply", FpMulMode::Multiply), ("fused_multiply_add", FpMulMode::FusedMultiplyAdd)];
+const EXP_MODES: [(&str, ExpMode); 3] =
+    [("arbitrary", ExpMode::Arbitrary), ("exp", ExpMode::Exp), ("exp_minus_one", ExpMode::ExpMinusOne)];
+const LOG_MODES: [(&str, LogMode); 4] = [
+    ("arbitrary_base", LogMode::ArbitraryBase),
+    ("natural_plus_one", LogMode::NaturalPlusOne),
+    ("natural", LogMode::Natural),
+    ("base10", LogMode::Base10),
+];
+const ROUND_MODES: [(&str, RoundMode); 5] = [
+    ("ceil", RoundMode::Ceil),
+    ("floor", RoundMode::Floor),
+    ("round", RoundMode::Round),
+    ("rint", RoundMode::Rint),
+    ("truncate", RoundMode::Truncate),
+];
+const TRIG_MODES: [(&str, TrigMode); 3] =
+    [("trig", TrigMode::Trig), ("inverse", TrigMode::Inverse), ("hyperbolic", TrigMode::Hyperbolic)];
+
+impl CalcKind {
+    fn name(self) -> &'static str {
+        match self {
+            CalcKind::Adder => "FP Adder",
+            CalcKind::Subtractor => "FP Subtractor",
+            CalcKind::Multiplier(_) => "FP Multiplier",
+            CalcKind::Divider => "FP Divider",
+            CalcKind::Negator => "FP Negator",
+            CalcKind::Absolute => "FP Absolute Value",
+            CalcKind::SquareRoot => "FP Square Root",
+            CalcKind::Exponentiator(_) => "FP Exponentiator",
+            CalcKind::Logarithm(_) => "FP Logarithm",
+            CalcKind::MinMax => "FP Min/Max",
+            CalcKind::Round(_) => "FP Round",
+            CalcKind::Trigonometry(_) => "FP Trigonometry",
+        }
+    }
+    fn outs(self) -> &'static [Pos] {
+        match self {
+            CalcKind::Divider => &[(0, 0), (-10, 20)],
+            CalcKind::MinMax => &[(0, -10), (0, 10)],
+            CalcKind::Trigonometry(_) => &[(0, -10), (0, 0), (0, 10)],
+            _ => &[(0, 0)],
+        }
+    }
+    fn ins(self) -> &'static [Pos] {
+        const ONE: &[Pos] = &[(-40, 0)];
+        const TWO: &[Pos] = &[(-40, -10), (-40, 10)];
+        match self {
+            CalcKind::Multiplier(FpMulMode::FusedMultiplyAdd) => &[(-40, -10), (-40, 10), (-20, -20)],
+            CalcKind::Adder
+            | CalcKind::Subtractor
+            | CalcKind::Multiplier(_)
+            | CalcKind::Divider
+            | CalcKind::MinMax
+            | CalcKind::Exponentiator(ExpMode::Arbitrary)
+            | CalcKind::Logarithm(LogMode::ArbitraryBase) => TWO,
+            _ => ONE,
+        }
+    }
+    fn eval(self, v: &[f64]) -> Vec<f64> {
+        match self {
+            CalcKind::Adder => vec![v[0] + v[1]],
+            CalcKind::Subtractor => vec![v[0] - v[1]],
+            CalcKind::Multiplier(FpMulMode::Multiply) => vec![v[0] * v[1]],
+            CalcKind::Multiplier(FpMulMode::FusedMultiplyAdd) => vec![v[0].mul_add(v[1], v[2])],
+            CalcKind::Divider => vec![v[0] / v[1], ieee_remainder(v[0], v[1])],
+            CalcKind::Negator => vec![-v[0]],
+            CalcKind::Absolute => vec![v[0].abs()],
+            CalcKind::SquareRoot => vec![v[0].sqrt()],
+            CalcKind::Exponentiator(ExpMode::Arbitrary) => vec![java_pow(v[0], v[1])],
+            CalcKind::Exponentiator(ExpMode::Exp) => vec![v[0].exp()],
+            CalcKind::Exponentiator(ExpMode::ExpMinusOne) => vec![v[0].exp_m1()],
+            CalcKind::Logarithm(LogMode::ArbitraryBase) => vec![v[0].ln() / v[1].ln()],
+            CalcKind::Logarithm(LogMode::NaturalPlusOne) => vec![v[0].ln_1p()],
+            CalcKind::Logarithm(LogMode::Natural) => vec![v[0].ln()],
+            CalcKind::Logarithm(LogMode::Base10) => vec![v[0].log10()],
+            CalcKind::MinMax => vec![java_min(v[0], v[1]), java_max(v[0], v[1])],
+            CalcKind::Round(m) => vec![round_f64(m, v[0])],
+            CalcKind::Trigonometry(TrigMode::Trig) => vec![v[0].sin(), v[0].tan(), v[0].cos()],
+            CalcKind::Trigonometry(TrigMode::Inverse) => vec![v[0].asin(), v[0].atan(), v[0].acos()],
+            CalcKind::Trigonometry(TrigMode::Hyperbolic) => vec![v[0].sinh(), v[0].tanh(), v[0].cosh()],
+        }
+    }
+    /// The `mode` option name, if this kind has one.
+    fn mode_name(self) -> Option<&'static str> {
+        Some(match self {
+            CalcKind::Multiplier(m) => OptionMap::name_of(m, &MUL_MODES),
+            CalcKind::Exponentiator(m) => OptionMap::name_of(m, &EXP_MODES),
+            CalcKind::Logarithm(m) => OptionMap::name_of(m, &LOG_MODES),
+            CalcKind::Round(m) => OptionMap::name_of(m, &ROUND_MODES),
+            CalcKind::Trigonometry(m) => OptionMap::name_of(m, &TRIG_MODES),
+            _ => return None,
+        })
+    }
+    fn with_mode(self, m: &OptionMap) -> Result<Self, String> {
+        Ok(match self {
+            CalcKind::Multiplier(d) => CalcKind::Multiplier(m.choice("mode", &MUL_MODES)?.unwrap_or(d)),
+            CalcKind::Exponentiator(d) => CalcKind::Exponentiator(m.choice("mode", &EXP_MODES)?.unwrap_or(d)),
+            CalcKind::Logarithm(d) => CalcKind::Logarithm(m.choice("mode", &LOG_MODES)?.unwrap_or(d)),
+            CalcKind::Round(d) => CalcKind::Round(m.choice("mode", &ROUND_MODES)?.unwrap_or(d)),
+            CalcKind::Trigonometry(d) => CalcKind::Trigonometry(m.choice("mode", &TRIG_MODES)?.unwrap_or(d)),
+            other => other,
+        })
+    }
+}
+
+/// Reads an optional floating-point width option.
+fn fp_width_opt(m: &OptionMap, key: &str) -> Result<Option<BitWidth>, String> {
+    match m.int(key, 1, 64)? {
+        None => Ok(None),
+        Some(w) if FP_WIDTHS.contains(&(w as u8)) => Ok(Some(BitWidth::new(w as u8))),
+        Some(w) => Err(format!("option '{key}' = {w} must be one of {FP_WIDTHS:?}")),
+    }
+}
+
 /// A floating-point part computing one or more `f64` results from its inputs.
 ///
 /// Ports: the value outputs (first at (0,0)), `err` at (-20,20), then the inputs.
+/// Default width 32; modes (where present) default to Logisim's defaults.
+#[derive(Debug, Clone)]
 pub struct FpCalc {
-    name: &'static str,
+    kind: CalcKind,
     width: BitWidth,
-    outs: Vec<Pos>,
-    ins: Vec<Pos>,
-    f: fn(&[f64]) -> Vec<f64>,
 }
 
 impl FpCalc {
-    fn new(name: &'static str, width: u8, outs: &[Pos], ins: &[Pos], f: fn(&[f64]) -> Vec<f64>) -> Self {
-        FpCalc { name, width: check_width(width), outs: outs.to_vec(), ins: ins.to_vec(), f }
-    }
-    fn unary(name: &'static str, w: u8, f: fn(&[f64]) -> Vec<f64>) -> Self {
-        Self::new(name, w, &[(0, 0)], &[(-40, 0)], f)
-    }
-    fn binary(name: &'static str, w: u8, f: fn(&[f64]) -> Vec<f64>) -> Self {
-        Self::new(name, w, &[(0, 0)], &[(-40, -10), (-40, 10)], f)
+    pub fn new(kind: CalcKind, width: u8) -> Self {
+        FpCalc { kind, width: check_width(width) }
     }
     /// Number of value outputs; `err` is the port after them.
     pub fn output_count(&self) -> usize {
-        self.outs.len()
+        self.kind.outs().len()
+    }
+    pub fn kind(&self) -> CalcKind {
+        self.kind
     }
 
     pub fn adder(w: u8) -> Self {
-        Self::binary("FP Adder", w, |v| vec![v[0] + v[1]])
+        Self::new(CalcKind::Adder, w)
     }
     /// Ports: 0 out, 1 err, 2 A, 3 B. Computes `A - B`.
     pub fn subtractor(w: u8) -> Self {
-        Self::binary("FP Subtractor", w, |v| vec![v[0] - v[1]])
+        Self::new(CalcKind::Subtractor, w)
     }
+    /// The fused mode adds a third input C at (-20,-20): ports 0 out, 1 err, 2 A, 3 B, 4 C.
     pub fn multiplier(w: u8, mode: FpMulMode) -> Self {
-        match mode {
-            FpMulMode::Multiply => Self::binary("FP Multiplier", w, |v| vec![v[0] * v[1]]),
-            // third input (addend) at (-20,-20): ports 0 out, 1 err, 2 A, 3 B, 4 C
-            FpMulMode::FusedMultiplyAdd => {
-                Self::new("FP Multiplier", w, &[(0, 0)], &[(-40, -10), (-40, 10), (-20, -20)], |v| {
-                    vec![v[0].mul_add(v[1], v[2])]
-                })
-            }
-        }
+        Self::new(CalcKind::Multiplier(mode), w)
     }
     /// Ports: 0 quotient, 1 IEEE remainder (-10,20), 2 err, 3 A, 4 B.
     pub fn divider(w: u8) -> Self {
-        Self::new("FP Divider", w, &[(0, 0), (-10, 20)], &[(-40, -10), (-40, 10)], |v| {
-            vec![v[0] / v[1], ieee_remainder(v[0], v[1])]
-        })
+        Self::new(CalcKind::Divider, w)
     }
     pub fn negator(w: u8) -> Self {
-        Self::unary("FP Negator", w, |v| vec![-v[0]])
+        Self::new(CalcKind::Negator, w)
     }
     pub fn absolute(w: u8) -> Self {
-        Self::unary("FP Absolute Value", w, |v| vec![v[0].abs()])
+        Self::new(CalcKind::Absolute, w)
     }
     pub fn square_root(w: u8) -> Self {
-        Self::unary("FP Square Root", w, |v| vec![v[0].sqrt()])
+        Self::new(CalcKind::SquareRoot, w)
     }
     /// Arbitrary mode ports: 0 out, 1 err, 2 base (-40,-10), 3 exponent (-40,10); other modes: 2 input.
     pub fn exponentiator(w: u8, mode: ExpMode) -> Self {
-        match mode {
-            ExpMode::Arbitrary => Self::binary("FP Exponentiator", w, |v| vec![java_pow(v[0], v[1])]),
-            ExpMode::Exp => Self::unary("FP Exponentiator", w, |v| vec![v[0].exp()]),
-            ExpMode::ExpMinusOne => Self::unary("FP Exponentiator", w, |v| vec![v[0].exp_m1()]),
-        }
+        Self::new(CalcKind::Exponentiator(mode), w)
     }
     /// Arbitrary-base ports: 0 out, 1 err, 2 value (-40,-10), 3 base (-40,10); other modes: 2 input.
     pub fn logarithm(w: u8, mode: LogMode) -> Self {
-        match mode {
-            LogMode::ArbitraryBase => Self::binary("FP Logarithm", w, |v| vec![v[0].ln() / v[1].ln()]),
-            LogMode::NaturalPlusOne => Self::unary("FP Logarithm", w, |v| vec![v[0].ln_1p()]),
-            LogMode::Natural => Self::unary("FP Logarithm", w, |v| vec![v[0].ln()]),
-            LogMode::Base10 => Self::unary("FP Logarithm", w, |v| vec![v[0].log10()]),
-        }
+        Self::new(CalcKind::Logarithm(mode), w)
     }
     /// Ports: 0 min (0,-10), 1 max (0,10), 2 err, 3 A, 4 B.
     pub fn min_max(w: u8) -> Self {
-        Self::new("FP Min/Max", w, &[(0, -10), (0, 10)], &[(-40, -10), (-40, 10)], |v| {
-            vec![java_min(v[0], v[1]), java_max(v[0], v[1])]
-        })
+        Self::new(CalcKind::MinMax, w)
     }
     pub fn round(w: u8, mode: RoundMode) -> Self {
-        match mode {
-            RoundMode::Ceil => Self::unary("FP Round", w, |v| vec![round_f64(RoundMode::Ceil, v[0])]),
-            RoundMode::Floor => Self::unary("FP Round", w, |v| vec![round_f64(RoundMode::Floor, v[0])]),
-            RoundMode::Round => Self::unary("FP Round", w, |v| vec![round_f64(RoundMode::Round, v[0])]),
-            RoundMode::Rint => Self::unary("FP Round", w, |v| vec![round_f64(RoundMode::Rint, v[0])]),
-            RoundMode::Truncate => Self::unary("FP Round", w, |v| vec![round_f64(RoundMode::Truncate, v[0])]),
-        }
+        Self::new(CalcKind::Round(mode), w)
     }
     /// Ports: 0 sin (0,-10), 1 tan (0,0), 2 cos (0,10), 3 err, 4 input (-40,0). Inverse/hyperbolic
     /// modes compute asin/atan/acos or sinh/tanh/cosh on the same ports.
     pub fn trigonometry(w: u8, mode: TrigMode) -> Self {
-        let outs = [(0, -10), (0, 0), (0, 10)];
-        let ins = [(-40, 0)];
-        match mode {
-            TrigMode::Trig => Self::new("FP Trigonometry", w, &outs, &ins, |v| vec![v[0].sin(), v[0].tan(), v[0].cos()]),
-            TrigMode::Inverse => {
-                Self::new("FP Trigonometry", w, &outs, &ins, |v| vec![v[0].asin(), v[0].atan(), v[0].acos()])
-            }
-            TrigMode::Hyperbolic => {
-                Self::new("FP Trigonometry", w, &outs, &ins, |v| vec![v[0].sinh(), v[0].tanh(), v[0].cosh()])
-            }
-        }
+        Self::new(CalcKind::Trigonometry(mode), w)
     }
 }
 
 impl Component for FpCalc {
     fn name(&self) -> &str {
-        self.name
+        self.kind.name()
+    }
+    fn options(&self) -> OptionMap {
+        let m = OptionMap::new().with("width", self.width.get());
+        match self.kind.mode_name() {
+            Some(mode) => m.with("mode", mode),
+            None => m,
+        }
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(if self.kind.mode_name().is_some() { &["width", "mode"] } else { &["width"] })?;
+        let kind = self.kind.with_mode(m)?;
+        let width = fp_width_opt(m, "width")?.unwrap_or(self.width);
+        (self.kind, self.width) = (kind, width);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
-        let mut ps: Vec<Port> = self.outs.iter().map(|&(x, y)| Port::new(x, y, PortKind::Output, self.width)).collect();
+        let mut ps: Vec<Port> =
+            self.kind.outs().iter().map(|&(x, y)| Port::new(x, y, PortKind::Output, self.width)).collect();
         ps.push(Port::new(-20, 20, PortKind::Output, BitWidth::ONE));
-        ps.extend(self.ins.iter().map(|&(x, y)| Port::new(x, y, PortKind::Input, self.width)));
+        ps.extend(self.kind.ins().iter().map(|&(x, y)| Port::new(x, y, PortKind::Input, self.width)));
         ps
     }
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx) {
-        let n = self.outs.len();
-        let args: Vec<f64> = (0..self.ins.len()).map(|i| fp_to_f64(&ctx.port_value(n + 1 + i))).collect();
-        let results = (self.f)(&args);
+        let n = self.output_count();
+        let args: Vec<f64> = (0..self.kind.ins().len()).map(|i| fp_to_f64(&ctx.port_value(n + 1 + i))).collect();
+        let results = self.kind.eval(&args);
         let d = delay(self.width.get() as usize + 2);
         for (i, r) in results.iter().enumerate() {
             ctx.set_port(i, f64_to_fp(self.width, *r), d);
@@ -433,6 +542,19 @@ impl Component for FpConstant {
     fn name(&self) -> &str {
         "FP Constant"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get()).with("value", self.value.to_string())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "value"])?;
+        let value = match m.string("value")? {
+            None => self.value,
+            Some(t) => t.trim().parse::<f64>().map_err(|_| format!("option 'value' = '{t}' is not a number"))?,
+        };
+        self.width = fp_width_opt(m, "width")?.unwrap_or(self.width);
+        self.value = value;
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![Port::new(0, 0, PortKind::Output, self.width)]
     }
@@ -463,6 +585,14 @@ impl FpComparator {
 impl Component for FpComparator {
     fn name(&self) -> &str {
         "FP Comparator"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width"])?;
+        self.width = fp_width_opt(m, "width")?.unwrap_or(self.width);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let one = BitWidth::ONE;
@@ -507,6 +637,14 @@ impl FpClassifier {
 impl Component for FpClassifier {
     fn name(&self) -> &str {
         "FP Classifier"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("width", self.width.get())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width"])?;
+        self.width = fp_width_opt(m, "width")?.unwrap_or(self.width);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let one = BitWidth::ONE;
@@ -557,6 +695,16 @@ impl Component for FpToFp {
     fn name(&self) -> &str {
         "FP to FP"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("from_width", self.from.get()).with("to_width", self.to.get())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["from_width", "to_width"])?;
+        let (from, to) = (fp_width_opt(m, "from_width")?, fp_width_opt(m, "to_width")?);
+        self.from = from.unwrap_or(self.from);
+        self.to = to.unwrap_or(self.to);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![
             Port::new(0, 0, PortKind::Output, self.to),
@@ -598,6 +746,20 @@ impl Component for FpToInt {
     fn name(&self) -> &str {
         "FP to Int"
     }
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("int_width", self.int_width.get())
+            .with("fp_width", self.fp_width.get())
+            .with("mode", OptionMap::name_of(self.mode, &ROUND_MODES))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["int_width", "fp_width", "mode"])?;
+        let mode = m.choice("mode", &ROUND_MODES)?.unwrap_or(self.mode);
+        let int_width = m.int("int_width", 1, 64)?.map_or(self.int_width, |w| BitWidth::new(w as u8));
+        self.fp_width = fp_width_opt(m, "fp_width")?.unwrap_or(self.fp_width);
+        (self.mode, self.int_width) = (mode, int_width);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         vec![
             Port::new(0, 0, PortKind::Output, self.int_width),
@@ -638,6 +800,20 @@ impl IntToFp {
 impl Component for IntToFp {
     fn name(&self) -> &str {
         "Int to FP"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("int_width", self.int_width.get())
+            .with("fp_width", self.fp_width.get())
+            .with("sign", OptionMap::name_of(self.sign, &super::SIGNS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["int_width", "fp_width", "sign"])?;
+        let sign = m.choice("sign", &super::SIGNS)?.unwrap_or(self.sign);
+        let int_width = m.int("int_width", 1, 64)?.map_or(self.int_width, |w| BitWidth::new(w as u8));
+        self.fp_width = fp_width_opt(m, "fp_width")?.unwrap_or(self.fp_width);
+        (self.sign, self.int_width) = (sign, int_width);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         vec![

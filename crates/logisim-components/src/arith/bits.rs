@@ -1,6 +1,6 @@
 //! Bit-level arithmetic parts: Shifter, Bit Adder and Bit Finder.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, raw, sext, WidthOptions};
 
@@ -118,9 +118,26 @@ impl Shifter {
     }
 }
 
+const SHIFT_KINDS: [(&str, ShiftKind); 5] = [
+    ("logical_left", ShiftKind::LogicalLeft),
+    ("logical_right", ShiftKind::LogicalRight),
+    ("arithmetic_right", ShiftKind::ArithmeticRight),
+    ("roll_left", ShiftKind::RollLeft),
+    ("roll_right", ShiftKind::RollRight),
+];
+
 impl Component for Shifter {
     fn name(&self) -> &str {
         "Shifter"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.width.options().with("shift", OptionMap::name_of(self.opts.kind, &SHIFT_KINDS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        let kind = m.choice("shift", &SHIFT_KINDS)?.unwrap_or(self.opts.kind);
+        self.opts.width.apply(m, &["shift"])?;
+        self.opts.kind = kind;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let w = self.opts.width.width;
@@ -202,6 +219,15 @@ impl BitAdder {
 impl Component for BitAdder {
     fn name(&self) -> &str {
         "Bit Adder"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.width.options().with("inputs", self.opts.inputs)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        let inputs = m.int("inputs", 1, 64)?.map_or(self.opts.inputs, |n| n as usize);
+        self.opts.width.apply(m, &["inputs"])?;
+        self.opts.inputs = inputs;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let n = self.opts.inputs as i32;
@@ -293,9 +319,25 @@ impl BitFinder {
     }
 }
 
+const FINDS: [(&str, BitFinderType); 4] = [
+    ("low_one", BitFinderType::LowOne),
+    ("high_one", BitFinderType::HighOne),
+    ("low_zero", BitFinderType::LowZero),
+    ("high_zero", BitFinderType::HighZero),
+];
+
 impl Component for BitFinder {
     fn name(&self) -> &str {
         "Bit Finder"
+    }
+    fn options(&self) -> OptionMap {
+        self.opts.width.options().with("find", OptionMap::name_of(self.opts.find, &FINDS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        let find = m.choice("find", &FINDS)?.unwrap_or(self.opts.find);
+        self.opts.width.apply(m, &["find"])?;
+        self.opts.find = find;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         vec![
