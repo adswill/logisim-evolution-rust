@@ -6,9 +6,9 @@
 //! the clock is at (-40,0) (one data input) or (-40,10) (two); clear (-10,30); preset (-30,30).
 //! Clear (asynchronous reset to 0) has priority over preset.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
-use super::{ClockState, Startup, Trigger, FLIPFLOP_DELAY};
+use super::{ClockState, Startup, Trigger, FLIPFLOP_DELAY, STARTUPS, TRIGGERS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlipFlopKind {
@@ -153,6 +153,22 @@ impl Component for FlipFlop {
         self.kind.name()
     }
 
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("trigger", OptionMap::name_of(self.opts.trigger, &TRIGGERS))
+            .with("startup", OptionMap::name_of(self.opts.startup, &STARTUPS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["trigger", "startup"])?;
+        let mut o = self.opts.clone();
+        o.trigger = m.choice("trigger", &TRIGGERS)?.unwrap_or(o.trigger);
+        o.startup = m.choice("startup", &STARTUPS)?.unwrap_or(o.startup);
+        if !o.trigger.is_edge() && !self.kind.allows_level_trigger() {
+            return Err(format!("{} only supports rising or falling triggers", self.kind.name()));
+        }
+        *self = FlipFlop::with_options(self.kind, o);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         let one = BitWidth::ONE;
         let n = self.kind.inputs();

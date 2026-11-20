@@ -1,17 +1,24 @@
 //! RAM (Java `Ram`). Port order and positions: see [`super::mem`] (data out first, so the
-//! primary output is port 0 at (0,0)); use [`Ram::layout_ports`] helpers such as
-//! [`Ram::addr_port`], [`Ram::data_in_port`], [`Ram::write_enable_port`] to find the others.
+//! primary output is port 0 at (0,0)); use the accessors
+//! [`Ram::addr_port`], [`Ram::data_in_port`], [`Ram::write_enable_port`], ... to find the others.
 //!
 //! Behaviour is a direct port of `Ram.propagate`: line-enable mode (several words per access,
 //! one enable per word) and byte-enable mode (one word, optional per-byte enables), synchronous
 //! or asynchronous (level-triggered) writes, read-after-write or write-after-read, optional
 //! asynchronous read, and a bidirectional or separate data bus.
 
-use logisim_core::{BitWidth, Component, Port, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PropagateCtx, Value};
 
 use super::contents::MemContents;
-use super::mem::{DataBus, EnableMode, Layout, LayoutSpec, LineSize, ReadBehavior};
-use super::{long_value, ClockState, Trigger, MEM_DELAY};
+use super::mem::{
+    DataBus, EnableMode, Layout, LayoutSpec, LineSize, ReadBehavior, BUSES, ENABLES, LINES, READS,
+};
+use super::{long_value, ClockState, Trigger, MEM_DELAY, TRIGGERS};
+
+const RAM_TYPES: [(&str, RamType); 2] = [
+    ("volatile", RamType::Volatile),
+    ("nonvolatile", RamType::NonVolatile),
+];
 
 /// Whether contents survive a simulation reset (Java `ATTR_TYPE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -217,7 +224,7 @@ impl Ram {
         error: bool,
     ) {
         let lines = self.layout.n_out.max(1);
-        let misaligned = addr % lines as u64 != 0;
+        let misaligned = !addr.is_multiple_of(lines as u64);
         let misalign_error = misaligned && !self.opts.allow_misaligned;
         let clk = self.layout.clk.map_or(Value::UNKNOWN, |p| ctx.port_value(p));
         let triggered = self.clock.update(clk, self.opts.trigger);
@@ -326,6 +333,67 @@ impl Ram {
 impl Component for Ram {
     fn name(&self) -> &str {
         "RAM"
+    }
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("addr_bits", o.addr_bits)
+            .with("data_bits", o.data_bits)
+            .with("enables", OptionMap::name_of(o.enables, &ENABLES))
+            .with("ram_type", OptionMap::name_of(o.ram_type, &RAM_TYPES))
+            .with("clear_pin", o.clear_pin)
+            .with("trigger", OptionMap::name_of(o.trigger, &TRIGGERS))
+            .with("async_read", o.async_read)
+            .with("read_behavior", OptionMap::name_of(o.read_behavior, &READS))
+            .with("byte_enables", o.byte_enables)
+            .with("bus", OptionMap::name_of(o.bus, &BUSES))
+            .with("line", OptionMap::name_of(o.line, &LINES))
+            .with("allow_misaligned", o.allow_misaligned)
+            // only non-volatile RAM keeps its contents in the saved file
+            .with(
+                "contents",
+                if o.ram_type == RamType::NonVolatile { self.contents.to_text() } else { String::new() },
+            )
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&[
+            "addr_bits",
+            "data_bits",
+            "enables",
+            "ram_type",
+            "clear_pin",
+            "trigger",
+            "async_read",
+            "read_behavior",
+            "byte_enables",
+            "bus",
+            "line",
+            "allow_misaligned",
+            "contents",
+        ])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("addr_bits", 2, 24)? {
+            o.addr_bits = v as u8;
+        }
+        if let Some(v) = m.int("data_bits", 1, 64)? {
+            o.data_bits = v as u8;
+        }
+        o.enables = m.choice("enables", &ENABLES)?.unwrap_or(o.enables);
+        o.ram_type = m.choice("ram_type", &RAM_TYPES)?.unwrap_or(o.ram_type);
+        o.clear_pin = m.boolean("clear_pin")?.unwrap_or(o.clear_pin);
+        o.trigger = m.choice("trigger", &TRIGGERS)?.unwrap_or(o.trigger);
+        o.async_read = m.boolean("async_read")?.unwrap_or(o.async_read);
+        o.read_behavior = m.choice("read_behavior", &READS)?.unwrap_or(o.read_behavior);
+        o.byte_enables = m.boolean("byte_enables")?.unwrap_or(o.byte_enables);
+        o.bus = m.choice("bus", &BUSES)?.unwrap_or(o.bus);
+        o.line = m.choice("line", &LINES)?.unwrap_or(o.line);
+        o.allow_misaligned = m.boolean("allow_misaligned")?.unwrap_or(o.allow_misaligned);
+        let mut ram = Ram::new(o);
+        if let Some(text) = m.string("contents")? {
+            ram.contents.load_text(text)?;
+        }
+        *self = ram;
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         self.layout.ports.clone()
@@ -545,6 +613,7 @@ mod tests {
         assert_eq!(p.data_in_port(0), 0);
         // drive the shared data port as an external writer
         b.drive(0, val(8, 0xEE));
+        b.start();
         b.set(p.output_enable_port().unwrap(), F);
         b.set(p.addr_port(), val(4, 1));
         b.set(p.write_enable_port().unwrap(), T);
@@ -599,6 +668,28 @@ mod tests {
         b.set(p.addr_port(), val(4, 1));
         b.pulse(p.clock_port().unwrap());
         assert_eq!(b.out(0), val(8, 0));
+    }
+
+    #[test]
+    fn options_round_trip_including_nonvolatile_contents() {
+        let mut r = Ram::new(
+            RamOptions::default()
+                .addr_bits(6)
+                .data_bits(12)
+                .ram_type(RamType::NonVolatile)
+                .bus(DataBus::Bidir)
+                .trigger(Trigger::Falling),
+        );
+        r.contents_mut().set(3, 0xABC);
+        let saved = r.options();
+        let mut fresh = Ram::new(RamOptions::default());
+        fresh.set_options(&saved).unwrap();
+        assert_eq!(fresh.options(), saved);
+        assert_eq!(fresh.contents().get(3), 0xABC);
+        assert_eq!(fresh.ports(), r.ports());
+        assert!(fresh.set_options(&OptionMap::new().with("bogus", 1)).is_err());
+        assert!(fresh.set_options(&OptionMap::new().with("addr_bits", 99)).is_err());
+        assert!(fresh.set_options(&OptionMap::new().with("bus", "nope")).is_err());
     }
 
     #[test]

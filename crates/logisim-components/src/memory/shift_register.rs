@@ -3,16 +3,15 @@
 //! Port order (east-facing, classic layout, translated so the serial output is at (0,0)):
 //! `0` serial out · `1` serial in · `2` shift enable · `3` clock · `4` clear · `5` parallel load ·
 //! then, when `parallel` is on, for stage `i`: `6+2i` parallel in, `7+2i` parallel out.
-//! Without parallel load the load port and stage ports still exist in the port list's numbering
-//! but are absent (the list is just 5 ports long).
+//! Without `parallel` only ports 0..=4 exist (5 ports); the load port (5) and stage ports are absent.
 //!
 //! Stage 0 holds the newest bit; the serial output is the oldest stage (`length-1`).
 //! Shift enable is active unless exactly 0. Clear dominates; load dominates shifting.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use super::register::initial;
-use super::{ClockState, Startup, Trigger, SHIFT_DELAY};
+use super::{ClockState, Startup, Trigger, SHIFT_DELAY, STARTUPS, TRIGGERS};
 
 pub const OUT: usize = 0;
 pub const IN: usize = 1;
@@ -108,6 +107,34 @@ impl Component for ShiftRegister {
         "Shift Register"
     }
 
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("width", o.width.get())
+            .with("length", o.length)
+            .with("parallel", o.parallel)
+            .with("trigger", OptionMap::name_of(o.trigger, &TRIGGERS))
+            .with("startup", OptionMap::name_of(o.startup, &STARTUPS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "length", "parallel", "trigger", "startup"])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("length", 1, 64)? {
+            o.length = v as usize;
+        }
+        o.parallel = m.boolean("parallel")?.unwrap_or(o.parallel);
+        let trigger = m.choice("trigger", &TRIGGERS)?.unwrap_or(o.trigger);
+        if !trigger.is_edge() {
+            return Err("shift registers only support rising or falling triggers".into());
+        }
+        o.trigger = trigger;
+        o.startup = m.choice("startup", &STARTUPS)?.unwrap_or(o.startup);
+        *self = ShiftRegister::new(o);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         let (w, one) = (self.opts.width, BitWidth::ONE);
         let len = self.opts.length as i32;

@@ -69,6 +69,24 @@ pub enum ReadBehavior {
     WriteAfterRead,
 }
 
+pub(crate) const LINES: [(&str, LineSize); 4] = [
+    ("single", LineSize::Single),
+    ("dual", LineSize::Dual),
+    ("quad", LineSize::Quad),
+    ("octo", LineSize::Octo),
+];
+pub(crate) const ENABLES: [(&str, EnableMode); 2] =
+    [("byte", EnableMode::Byte), ("line", EnableMode::Line)];
+pub(crate) const BUSES: [(&str, DataBus); 3] = [
+    ("separate", DataBus::Separate),
+    ("separate_controlled", DataBus::SeparateControlled),
+    ("bidir", DataBus::Bidir),
+];
+pub(crate) const READS: [(&str, ReadBehavior); 2] = [
+    ("read_after_write", ReadBehavior::ReadAfterWrite),
+    ("write_after_read", ReadBehavior::WriteAfterRead),
+];
+
 /// Everything the layout depends on.
 #[derive(Debug, Clone)]
 pub(crate) struct LayoutSpec {

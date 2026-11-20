@@ -4,9 +4,9 @@
 //! `3` clear (-10,20) · `4` enable (-30,10). Q and D are `width` bits wide, the rest 1 bit.
 //! Enable is active unless it is exactly 0 (so an unconnected enable still loads).
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
-use super::{ClockState, Startup, Trigger, REGISTER_DELAY};
+use super::{ClockState, Startup, Trigger, REGISTER_DELAY, STARTUPS, TRIGGERS};
 
 pub const Q: usize = 0;
 pub const D: usize = 1;
@@ -78,6 +78,23 @@ impl Register {
 impl Component for Register {
     fn name(&self) -> &str {
         "Register"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("width", self.opts.width.get())
+            .with("trigger", OptionMap::name_of(self.opts.trigger, &TRIGGERS))
+            .with("startup", OptionMap::name_of(self.opts.startup, &STARTUPS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "trigger", "startup"])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        o.trigger = m.choice("trigger", &TRIGGERS)?.unwrap_or(o.trigger);
+        o.startup = m.choice("startup", &STARTUPS)?.unwrap_or(o.startup);
+        *self = Register::new(o);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let (w, one) = (self.opts.width, BitWidth::ONE);

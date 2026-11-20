@@ -2,10 +2,10 @@
 //! then address. Reads are combinational. Use [`RomOptions::contents`] or
 //! [`RomOptions::with_data`] to load the program.
 
-use logisim_core::{BitWidth, Component, Port, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PropagateCtx, Value};
 
 use super::contents::MemContents;
-use super::mem::{Layout, LayoutSpec, LineSize};
+use super::mem::{Layout, LayoutSpec, LineSize, LINES};
 use super::{long_value, MEM_DELAY, Trigger};
 use super::mem::{DataBus, EnableMode};
 
@@ -106,6 +106,33 @@ impl Component for Rom {
     fn name(&self) -> &str {
         "ROM"
     }
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("addr_bits", o.addr_bits)
+            .with("data_bits", o.data_bits)
+            .with("line", OptionMap::name_of(o.line, &LINES))
+            .with("allow_misaligned", o.allow_misaligned)
+            .with("contents", o.contents.to_text())
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["addr_bits", "data_bits", "line", "allow_misaligned", "contents"])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("addr_bits", 2, 24)? {
+            o = o.addr_bits(v as u8);
+        }
+        if let Some(v) = m.int("data_bits", 1, 64)? {
+            o = o.data_bits(v as u8);
+        }
+        o.line = m.choice("line", &LINES)?.unwrap_or(o.line);
+        o.allow_misaligned = m.boolean("allow_misaligned")?.unwrap_or(o.allow_misaligned);
+        if let Some(text) = m.string("contents")? {
+            o.contents.clear();
+            o.contents.load_text(text)?;
+        }
+        *self = Rom::new(o);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         self.layout.ports.clone()
     }
@@ -125,7 +152,7 @@ impl Component for Rom {
             return drive_all(ctx, Value::unknown(bits));
         }
         let addr = long_value(addr_value);
-        let misalign_error = addr % lines as u64 != 0 && !self.opts.allow_misaligned;
+        let misalign_error = !addr.is_multiple_of(lines as u64) && !self.opts.allow_misaligned;
         for i in 0..lines {
             let v = if misalign_error {
                 Value::error(bits)
@@ -198,6 +225,23 @@ mod tests {
         let opts = RomOptions::default().contents(c);
         let (mut b, _) = bench(opts);
         assert_eq!(b.out(0), val(16, 0xBEEF));
+    }
+
+    #[test]
+    fn options_round_trip_with_contents() {
+        let opts = RomOptions::default()
+            .addr_bits(5)
+            .data_bits(10)
+            .line(LineSize::Dual)
+            .with_data(&[0x3FF, 0x3FF, 0, 0, 0x155]);
+        let rom = Rom::new(opts);
+        let saved = rom.options();
+        let mut fresh = Rom::new(RomOptions::default());
+        fresh.set_options(&saved).unwrap();
+        assert_eq!(fresh.options(), saved);
+        assert_eq!(fresh.contents().get(4), 0x155);
+        assert_eq!(fresh.ports(), rom.ports());
+        assert!(fresh.set_options(&OptionMap::new().with("contents", "fff")).is_err());
     }
 
     #[test]

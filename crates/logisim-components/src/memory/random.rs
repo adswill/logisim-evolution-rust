@@ -5,9 +5,9 @@
 //! Each enabled clock trigger advances the sequence; reset restarts it from the seed.
 //! A seed of 0 means "pick a fresh time-based seed" (at creation and on each reset pulse).
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
-use super::{ClockState, Trigger, SHIFT_DELAY};
+use super::{ClockState, Trigger, SHIFT_DELAY, TRIGGERS};
 
 pub const Q: usize = 0;
 pub const CLOCK: usize = 1;
@@ -143,6 +143,29 @@ impl Random {
 impl Component for Random {
     fn name(&self) -> &str {
         "Random"
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+            .with("width", self.opts.width.get())
+            .with("seed", i64::from(self.opts.seed))
+            .with("trigger", OptionMap::name_of(self.opts.trigger, &TRIGGERS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "seed", "trigger"])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("seed", 0, i64::from(u32::MAX))? {
+            o.seed = v as u32;
+        }
+        let trigger = m.choice("trigger", &TRIGGERS)?.unwrap_or(o.trigger);
+        if !trigger.is_edge() {
+            return Err("random generators only support rising or falling triggers".into());
+        }
+        o.trigger = trigger;
+        *self = Random::new(o);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let one = BitWidth::ONE;

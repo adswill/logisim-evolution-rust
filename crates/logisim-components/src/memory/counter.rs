@@ -8,10 +8,10 @@
 //! One deliberate difference from the Java source: when the counter holds an unknown/error value
 //! and the clock does not fire, the Java code outputs all-ones; here the unknown value is kept.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 use super::register::initial;
-use super::{long_value, ClockState, Startup, Trigger, REGISTER_DELAY};
+use super::{long_value, parse_u64, ClockState, Startup, Trigger, REGISTER_DELAY, STARTUPS, TRIGGERS};
 
 pub const Q: usize = 0;
 pub const DATA: usize = 1;
@@ -35,6 +35,13 @@ pub enum OnGoal {
     /// Load the data input.
     Load,
 }
+
+const ON_GOALS: [(&str, OnGoal); 4] = [
+    ("wrap", OnGoal::Wrap),
+    ("stay", OnGoal::Stay),
+    ("continue", OnGoal::Continue),
+    ("load", OnGoal::Load),
+];
 
 #[derive(Debug, Clone)]
 pub struct CounterOptions {
@@ -118,6 +125,35 @@ impl Counter {
 impl Component for Counter {
     fn name(&self) -> &str {
         "Counter"
+    }
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("width", o.width.get())
+            .with("max", o.max.to_string())
+            .with("on_goal", OptionMap::name_of(o.on_goal, &ON_GOALS))
+            .with("trigger", OptionMap::name_of(o.trigger, &TRIGGERS))
+            .with("startup", OptionMap::name_of(o.startup, &STARTUPS))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "max", "on_goal", "trigger", "startup"])?;
+        let mut o = self.opts.clone();
+        if let Some(v) = m.int("width", 1, 64)? {
+            o = o.width(v as u8);
+        }
+        // `max` is an unsigned 64-bit number, saved as text so values above i64::MAX survive
+        if let Some(s) = m.string("max")? {
+            o = o.max(parse_u64(s)?);
+        }
+        o.on_goal = m.choice("on_goal", &ON_GOALS)?.unwrap_or(o.on_goal);
+        let trigger = m.choice("trigger", &TRIGGERS)?.unwrap_or(o.trigger);
+        if !trigger.is_edge() {
+            return Err("counters only support rising or falling triggers".into());
+        }
+        o.trigger = trigger;
+        o.startup = m.choice("startup", &STARTUPS)?.unwrap_or(o.startup);
+        *self = Counter::new(o);
+        Ok(())
     }
     fn ports(&self) -> Vec<Port> {
         let (w, one) = (self.opts.width, BitWidth::ONE);
@@ -286,9 +322,9 @@ mod tests {
         }
         assert_eq!(b.out(Q), val(4, 0), "decade counter wraps 9 -> 0");
 
-        let mut b = bench(CounterOptions::default().width(4).max(2).on_goal(OnGoal::Load));
+        let mut b = bench(CounterOptions::default().width(4).max(6).on_goal(OnGoal::Load));
         b.set(DATA, val(4, 5));
-        for _ in 0..3 {
+        for _ in 0..7 {
             b.pulse(CLOCK);
         }
         assert_eq!(b.out(Q), val(4, 5));

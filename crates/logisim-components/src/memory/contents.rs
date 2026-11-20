@@ -152,8 +152,110 @@ impl MemContents {
     }
 }
 
+impl MemContents {
+    /// Number of words up to and including the last non-zero one (0 if all clear).
+    pub fn used_len(&self) -> u64 {
+        let mut best = 0;
+        for (&page, p) in &self.pages {
+            if let Some(i) = p.iter().rposition(|&w| w & self.mask() != 0) {
+                best = best.max((page << PAGE_BITS) + i as u64 + 1);
+            }
+        }
+        best
+    }
+
+    /// Text form for saving: hexadecimal words separated by spaces, with `value*count` for runs,
+    /// ending at the last non-zero word (e.g. `1f 2a 0*10 ff`). Empty when all zero.
+    pub fn to_text(&self) -> String {
+        let len = self.used_len();
+        let mut out: Vec<String> = vec![];
+        let (mut run_val, mut run_len) = (0u64, 0u64);
+        let flush = |out: &mut Vec<String>, v: u64, n: u64| match n {
+            0 => {}
+            1 => out.push(format!("{v:x}")),
+            _ => out.push(format!("{v:x}*{n}")),
+        };
+        let mut a = 0;
+        while a < len {
+            // skip absent pages in one step
+            if a & PAGE_MASK == 0 && !self.pages.contains_key(&(a >> PAGE_BITS)) {
+                let n = (PAGE_SIZE as u64).min(len - a);
+                if run_len > 0 && run_val == 0 {
+                    run_len += n;
+                } else {
+                    flush(&mut out, run_val, run_len);
+                    (run_val, run_len) = (0, n);
+                }
+                a += n;
+                continue;
+            }
+            let v = self.get(a);
+            if run_len > 0 && v == run_val {
+                run_len += 1;
+            } else {
+                flush(&mut out, run_val, run_len);
+                (run_val, run_len) = (v, 1);
+            }
+            a += 1;
+        }
+        flush(&mut out, run_val, run_len);
+        out.join(" ")
+    }
+
+    /// Loads text produced by [`to_text`](Self::to_text) at address 0.
+    pub fn load_text(&mut self, text: &str) -> Result<(), String> {
+        let mut addr = 0u64;
+        for tok in text.split_whitespace() {
+            let (v, n) = match tok.split_once('*') {
+                Some((v, n)) => (
+                    v,
+                    n.parse::<u64>().map_err(|_| format!("bad repeat count in `{tok}`"))?,
+                ),
+                None => (tok, 1),
+            };
+            let v = u64::from_str_radix(v, 16).map_err(|_| format!("`{v}` is not a hexadecimal word"))?;
+            if v & !self.mask() != 0 {
+                return Err(format!("`{tok}` does not fit in {} bits", self.width));
+            }
+            if addr.saturating_add(n) > self.last_offset() + 1 {
+                return Err("contents are larger than the memory".into());
+            }
+            self.fill(addr, n, v);
+            addr += n;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_round_trip_with_runs() {
+        let mut m = MemContents::new(16, 16);
+        m.set(0, 0x1f);
+        m.set(1, 0x1f);
+        m.set(2, 0x1f);
+        m.set(10, 0xabcd);
+        m.set(9000, 7);
+        let t = m.to_text();
+        assert!(t.starts_with("1f*3 0*7 abcd 0*"), "{t}");
+        let mut n = MemContents::new(16, 16);
+        n.load_text(&t).unwrap();
+        assert_eq!(n.get(10), 0xabcd);
+        assert_eq!(n.get(9000), 7);
+        assert_eq!(n.get(8999), 0);
+        assert_eq!(n.to_text(), t);
+        assert_eq!(MemContents::new(4, 4).to_text(), "");
+    }
+
+    #[test]
+    fn text_load_rejects_bad_input() {
+        let mut m = MemContents::new(2, 4);
+        assert!(m.load_text("zz").is_err());
+        assert!(m.load_text("1f").is_err());
+        assert!(m.load_text("1*5").is_err());
+    }
+
     use super::*;
 
     #[test]

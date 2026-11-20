@@ -53,6 +53,22 @@ pub fn library() -> Library {
     }
 }
 
+pub(crate) const TRIGGERS: [(&str, Trigger); 4] = [
+    ("rising", Trigger::Rising),
+    ("falling", Trigger::Falling),
+    ("high", Trigger::High),
+    ("low", Trigger::Low),
+];
+pub(crate) const STARTUPS: [(&str, Startup); 2] =
+    [("zero", Startup::Zero), ("unknown", Startup::Unknown)];
+
+/// Parses an unsigned decimal number (saved as text because options only hold `i64`).
+pub(crate) fn parse_u64(s: &str) -> Result<u64, String> {
+    s.trim()
+        .parse::<u64>()
+        .map_err(|_| format!("`{s}` is not a whole number between 0 and 18446744073709551615"))
+}
+
 /// Flip-flop propagation delay (ticks).
 pub const FLIPFLOP_DELAY: u32 = 5;
 /// Register and counter delay.
@@ -122,6 +138,43 @@ pub(crate) fn long_value(v: Value) -> u64 {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_part_round_trips_its_options() {
+        for p in &library().parts {
+            let part = (p.make)();
+            let saved = part.options();
+            let mut fresh = (p.make)();
+            fresh.set_options(&saved).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+            assert_eq!(fresh.options(), saved, "{}", p.name);
+            assert_eq!(fresh.ports(), part.ports(), "{}", p.name);
+        }
+    }
+
+    #[test]
+    fn options_change_ports_and_reject_bad_values() {
+        use logisim_core::OptionMap;
+        let mut sr = ShiftRegister::new(ShiftRegisterOptions::default());
+        sr.set_options(&OptionMap::new().with("length", 3).with("width", 4)).unwrap();
+        assert_eq!(sr.ports().len(), 6 + 6);
+        assert!(sr.set_options(&OptionMap::new().with("length", 0)).is_err());
+        assert!(sr.set_options(&OptionMap::new().with("trigger", "high")).is_err());
+        let mut jk = FlipFlop::new(FlipFlopKind::Jk);
+        assert!(jk.set_options(&OptionMap::new().with("trigger", "high")).is_err());
+        let mut d = FlipFlop::new(FlipFlopKind::D);
+        d.set_options(&OptionMap::new().with("trigger", "high")).unwrap();
+        let mut c = Counter::new(CounterOptions::default());
+        c.set_options(&OptionMap::new().with("width", 4).with("max", "9").with("on_goal", "stay"))
+            .unwrap();
+        assert_eq!(c.options().string("max").unwrap(), Some("9"));
+        assert!(c.set_options(&OptionMap::new().with("max", "-1")).is_err());
+        assert!(c.set_options(&OptionMap::new().with("typo", 1)).is_err());
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod testutil {
     //! A tiny test bench: one part under test, with input pins wired to any of its ports.
     use logisim_core::{Circuit, CompId, Component, Direction, Location, Value};
@@ -131,7 +184,6 @@ pub(crate) mod testutil {
     pub struct Bench {
         pub c: Circuit,
         pub id: CompId,
-        origin: Location,
         ports: Vec<Location>,
         segs: Vec<(Location, Location)>,
         pins: Vec<(usize, PinHandle, CompId)>,
@@ -147,25 +199,16 @@ pub(crate) mod testutil {
     impl Bench {
         pub fn new(comp: Box<dyn Component>) -> Bench {
             let mut c = Circuit::new();
-            let origin = Location::new(1000, 1000);
             let n = comp.ports().len();
-            let id = c.add_component(origin, Direction::East, comp);
+            let id = c.add_component(Location::new(1000, 1000), Direction::East, comp);
             let ports = (0..n).map(|i| c.port_location(id, i)).collect();
             Bench {
                 c,
                 id,
-                origin,
                 ports,
                 segs: vec![],
                 pins: vec![],
             }
-        }
-
-        pub fn port_loc(&self, i: usize) -> Location {
-            self.ports[i]
-        }
-        pub fn origin(&self) -> Location {
-            self.origin
         }
 
         /// Attach a pin with initial value `v` to port `port`, routed so that it never touches
