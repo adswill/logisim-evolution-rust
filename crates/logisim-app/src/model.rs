@@ -740,6 +740,7 @@ impl Editor {
             part: name.into(),
             at,
             facing: Direction::East,
+            mirror: false,
             options: Default::default(),
         })
     }

@@ -13,13 +13,14 @@ pub struct CompId(pub usize);
 struct Placed {
     loc: Location,
     facing: Direction,
+    mirror: bool,
     comp: Box<dyn Component>,
     ports: Vec<crate::component::Port>,
 }
 
 impl Placed {
     fn port_loc(&self, i: usize) -> Location {
-        let o = self.facing.rotate(self.ports[i].offset);
+        let o = self.facing.place(self.mirror, self.ports[i].offset);
         self.loc.translate(o.x, o.y)
     }
 }
@@ -118,10 +119,23 @@ impl Circuit {
         facing: Direction,
         comp: Box<dyn Component>,
     ) -> CompId {
+        self.add_component_oriented(loc, facing, false, comp)
+    }
+
+    /// Like [`add_component`](Self::add_component), optionally mirrored top-to-bottom
+    /// (see [`Direction::place`]).
+    pub fn add_component_oriented(
+        &mut self,
+        loc: Location,
+        facing: Direction,
+        mirror: bool,
+        comp: Box<dyn Component>,
+    ) -> CompId {
         let ports = comp.ports();
         self.placed.push(Placed {
             loc,
             facing,
+            mirror,
             comp,
             ports,
         });
@@ -534,6 +548,39 @@ mod tests {
         c.reset();
         assert_eq!(c.port_value(inv, 0), Value::FALSE);
         assert!(!c.is_oscillating());
+    }
+
+    #[test]
+    fn mirrored_part_has_its_ports_flipped_top_to_bottom() {
+        let mut c = Circuit::new();
+        let plain = c.add_component(Location::new(0, 0), Direction::East, Box::new(Inv));
+        let flipped =
+            c.add_component_oriented(Location::new(100, 0), Direction::East, true, Box::new(Inv));
+        // Inv ports: out (0,0), in (-10,0): on the mirror axis, so unchanged apart from position
+        assert_eq!(c.port_location(plain, 1), Location::new(-10, 0));
+        assert_eq!(c.port_location(flipped, 1), Location::new(90, 0));
+        // an off-axis part: AND-like ports at y = +-20
+        struct Two;
+        impl Component for Two {
+            fn name(&self) -> &str {
+                "two"
+            }
+            fn ports(&self) -> Vec<Port> {
+                vec![
+                    Port::new(0, 0, PortKind::Output, BitWidth::ONE),
+                    Port::new(-40, -20, PortKind::Input, BitWidth::ONE),
+                    Port::new(-40, 20, PortKind::Input, BitWidth::ONE),
+                ]
+            }
+            fn propagate(&mut self, _: &mut dyn PropagateCtx) {}
+        }
+        let t =
+            c.add_component_oriented(Location::new(0, 200), Direction::East, true, Box::new(Two));
+        assert_eq!(c.port_location(t, 1), Location::new(-40, 220)); // was above the origin
+        assert_eq!(c.port_location(t, 2), Location::new(-40, 180));
+        let r =
+            c.add_component_oriented(Location::new(0, 400), Direction::North, true, Box::new(Two));
+        assert_eq!(c.port_location(r, 1), Location::new(20, 440));
     }
 
     #[test]

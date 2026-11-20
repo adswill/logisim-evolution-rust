@@ -260,6 +260,7 @@ mod tests {
             part: part.into(),
             at: (0, 0),
             facing: Default::default(),
+            mirror: false,
             options: Default::default(),
         }
     }

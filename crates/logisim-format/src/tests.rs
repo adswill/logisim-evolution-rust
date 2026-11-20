@@ -40,6 +40,7 @@ impl Sheet {
             part: circuit.into(),
             at,
             facing: Direction::East,
+            mirror: false,
             options: OptionMap::new(),
         });
         for ((dx, dy), n) in ports {
@@ -311,4 +312,52 @@ fn document_shape_is_stable() {
     ] {
         assert!(text.contains(needle), "missing {needle} in:\n{text}");
     }
+}
+
+#[test]
+fn mirror_round_trips_and_is_omitted_when_false() {
+    let mut s = Sheet::new("main");
+    s.def
+        .components
+        .push(gate("AND Gate", 100, 100).mirrored(true));
+    s.def.components.push(gate("OR Gate", 300, 100));
+    let project = project_with(s.def, vec![]);
+    let text = project.to_ron().unwrap();
+    assert_eq!(text.matches("mirror: true").count(), 1, "{text}");
+    assert!(
+        !text.contains("mirror: false"),
+        "default is not written, so old readers and files are unaffected"
+    );
+    let back = ProjectFile::parse(&text).unwrap();
+    assert_eq!(back, project);
+    assert!(back.circuits[0].components[0].mirror);
+    // a file written before the field existed still loads (mirror = false)
+    let old = text.replace("mirror: true,", "");
+    assert!(!ProjectFile::parse(&old).unwrap().circuits[0].components[0].mirror);
+}
+
+#[test]
+fn mirrored_part_simulates_with_flipped_ports() {
+    // AND gate with inputs at y +-20; mirroring swaps which input is on top
+    let plain = gate("AND Gate", 100, 100);
+    let flipped = gate("AND Gate", 100, 100).mirrored(true);
+    let a = (
+        plain.port_location(1).unwrap(),
+        flipped.port_location(1).unwrap(),
+    );
+    assert_eq!(a.0.y, 80);
+    assert_eq!(a.1.y, 120);
+    // wire pins to the flipped gate through its own port locations and simulate
+    let mut s = Sheet::new("main");
+    s.part(pin(1, 0, 0), &[(0, "a")]);
+    s.part(pin(1, 0, 100), &[(0, "b")]);
+    s.part(
+        gate("AND Gate", 300, 0).mirrored(true),
+        &[(0, "out"), (1, "a"), (2, "b")],
+    );
+    s.tunnel((900, 0), "out");
+    let project = project_with(s.def, vec![]);
+    let mut c = project.instantiate_main().unwrap();
+    c.reset();
+    assert_eq!(read(&mut c, (900, 0)).to_u64(), Some(1));
 }

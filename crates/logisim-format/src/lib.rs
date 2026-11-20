@@ -57,7 +57,7 @@ pub struct InterfaceDef {
     pub offset: (i32, i32),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ComponentDef {
     /// Library name from the registry (e.g. "Gates"), or [`SUBCIRCUIT_LIBRARY`].
     pub library: String,
@@ -66,8 +66,16 @@ pub struct ComponentDef {
     pub at: (i32, i32),
     #[serde(default)]
     pub facing: Direction,
+    /// Mirrored top-to-bottom before rotating ("flip"). Optional: files without it load unmirrored,
+    /// and it is not written when false, so older files and readers are unaffected.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mirror: bool,
     #[serde(default)]
     pub options: OptionMap,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,11 +144,16 @@ impl ComponentDef {
             part: part.into(),
             at: (x, y),
             facing: Direction::East,
+            mirror: false,
             options: comp.options(),
         })
     }
     pub fn facing(mut self, d: Direction) -> Self {
         self.facing = d;
+        self
+    }
+    pub fn mirrored(mut self, m: bool) -> Self {
+        self.mirror = m;
         self
     }
     pub fn option(mut self, key: &str, v: impl Into<OptVal>) -> Self {
@@ -160,7 +173,7 @@ impl ComponentDef {
     /// Absolute location of the part's port `i` (registry parts only).
     pub fn port_location(&self, i: usize) -> Result<Location, Error> {
         let ports = self.build()?.ports();
-        let off = self.facing.rotate(ports[i].offset);
+        let off = self.facing.place(self.mirror, ports[i].offset);
         Ok(loc(self.at).translate(off.x, off.y))
     }
 }
@@ -257,7 +270,7 @@ impl ProjectFile {
             } else {
                 c.build()?
             };
-            circuit.add_component(loc(c.at), c.facing, comp);
+            circuit.add_component_oriented(loc(c.at), c.facing, c.mirror, comp);
         }
         for w in &def.wires {
             circuit.add_wire(loc(w.a), loc(w.b));

@@ -43,6 +43,17 @@ impl Direction {
             Direction::South => Location::new(-y, x),
         }
     }
+    /// Place a part-local offset: optionally mirror it top-to-bottom (y -> -y), then rotate to
+    /// this facing. This is the one rule for turning east-facing port offsets into world offsets.
+    pub fn place(self, mirror: bool, off: Location) -> Location {
+        let off = if mirror {
+            Location::new(off.x, -off.y)
+        } else {
+            off
+        };
+        self.rotate(off)
+    }
+
     pub fn reverse(self) -> Direction {
         match self {
             Direction::East => Direction::West,
@@ -56,6 +67,34 @@ impl Direction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mirror_flips_y_before_rotating() {
+        let o = Location::new(-30, 10);
+        for d in [
+            Direction::East,
+            Direction::North,
+            Direction::West,
+            Direction::South,
+        ] {
+            assert_eq!(d.place(false, o), d.rotate(o));
+            assert_eq!(d.place(true, o), d.rotate(Location::new(-30, -10)));
+        }
+        // east + mirror just negates y
+        assert_eq!(Direction::East.place(true, o), Location::new(-30, -10));
+        // mirroring is its own inverse
+        for d in [
+            Direction::East,
+            Direction::North,
+            Direction::West,
+            Direction::South,
+        ] {
+            let once = d.place(true, o);
+            let back = d.place(true, Location::new(o.x, -o.y));
+            assert_eq!(back, d.rotate(o));
+            assert_ne!(once, back);
+        }
+    }
+
     #[test]
     fn rotation() {
         let o = Location::new(-30, 10);
