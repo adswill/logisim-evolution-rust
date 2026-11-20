@@ -131,9 +131,10 @@ impl App {
         view: View,
         th: &Theme,
         cursor: Option<Pos2>,
+        hovered_problem: Option<Problem>,
     ) {
         let Some(m) = cursor else { return };
-        if let Some(p) = self.draw_badges(painter, view, th, Some(m)) {
+        if let Some(p) = hovered_problem {
             Self::draw_tip(painter, th, m, &p.tooltip(&self.infos[p.comp].name));
             return;
         }

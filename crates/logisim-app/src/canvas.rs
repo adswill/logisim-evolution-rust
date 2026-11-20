@@ -107,7 +107,9 @@ impl App {
             self.wire_chain = None;
         }
         self.draw_net_tooltip(&painter, &th, resp.hover_pos());
-        self.hover_feedback(&painter, view, &th, resp.hover_pos());
+        // badges are always drawn; the one under the pointer also gets its tooltip
+        let hovered_problem = self.draw_badges(&painter, view, &th, resp.hover_pos());
+        self.hover_feedback(&painter, view, &th, resp.hover_pos(), hovered_problem);
         self.minimap(ui, rect, &th);
         self.welcome(ui, rect);
         // screen readers: a summary of what the canvas contains

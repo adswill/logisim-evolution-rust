@@ -25,6 +25,7 @@ pub struct DevFlags {
     pub palette: bool,
     pub shortcuts: bool,
     pub minimap: bool,
+    pub badges: bool,
 }
 
 /// Drag-and-drop payload when dragging a part from the toolbox.
@@ -249,6 +250,9 @@ impl App {
         }
         app.show_shortcuts = dev.shortcuts;
         app.dev_minimap = dev.minimap;
+        if dev.badges {
+            app.ed = examples::badge_demo();
+        }
         app.refresh_style(ctx);
         app
     }

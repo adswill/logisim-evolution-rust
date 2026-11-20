@@ -53,6 +53,20 @@ pub fn half_adder() -> Editor {
     e
 }
 
+/// A Counter and a 2-input AND gate, both left unconnected: shows how problems are flagged
+/// (the counter's optional pins stay quiet; the AND gets one badge listing both inputs).
+pub fn badge_demo() -> Editor {
+    let mut e = Editor::new();
+    e.project.metadata.name = "Problem badges demo".into();
+    let part =
+        |lib: &str, name: &str, x, y| ComponentDef::new(lib, name, x, y).expect("registry part");
+    e.place(part("Memory", "Counter", 300, 140));
+    e.place(part("Gates", "AND Gate", 120, 140));
+    e.selection.clear();
+    e.mark_saved();
+    e
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

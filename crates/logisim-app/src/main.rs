@@ -33,6 +33,8 @@ fn main() -> eframe::Result {
     while let Some(a) = args.next() {
         if a == "--example" {
             example = true;
+        } else if a == "--demo-badges" {
+            dev.badges = true;
         } else if a == "--palette" {
             dev.palette = true;
         } else if a == "--minimap" {
