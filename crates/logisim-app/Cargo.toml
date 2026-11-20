@@ -11,3 +11,39 @@ logisim-core = { path = "../logisim-core" }
 logisim-components = { path = "../logisim-components" }
 logisim-format = { path = "../logisim-format" }
 rfd = "0.17"
+
+[package.metadata.packager]
+product-name = "rcirc"
+identifier = "io.github.adswill.rcirc"
+version = "0.1.0"
+authors = ["adswill"]
+description = "rcirc: a friendly digital logic designer and simulator (Rust port of Logisim Evolution)"
+long-description = "Design, simulate and share digital logic circuits. A Rust port of Logisim Evolution with a modern desktop editor."
+homepage = "https://github.com/adswill/logisim-evolution-rust"
+license-file = "../../LICENSE"
+category = "Education"
+out-dir = "../../dist"
+binaries-dir = "../../target/release"
+binaries = [{ path = "rcirc", main = true }]
+formats = ["dmg", "wix", "appimage", "deb"]
+icons = [
+  "../../assets/icons/icon-128.png",
+  "../../assets/icons/icon-256.png",
+  "../../assets/icons/icon-512.png",
+  "../../assets/icons/icon.icns",
+  "../../assets/icons/icon.ico",
+]
+
+[[package.metadata.packager.file-associations]]
+extensions = ["rcirc"]
+mime-type = "application/x-rcirc"
+description = "rcirc circuit"
+name = "rcirc"
+role = "editor"
+
+[package.metadata.packager.deb]
+depends = ["libgtk-3-0", "libxkbcommon0", "libwayland-client0"]
+section = "electronics"
+
+[package.metadata.packager.deb.files]
+"packaging/rcirc-mime.xml" = "usr/share/mime/packages/rcirc.xml"
