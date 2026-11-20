@@ -38,7 +38,7 @@ impl BitSelectorOptions {
     /// Number of select bits needed to address every group (never less than 1).
     pub fn select_bits(&self) -> u8 {
         let g = self.group.get() as u32;
-        let mut groups = (self.width.get() as u32 + g - 1) / g - 1;
+        let mut groups = (self.width.get() as u32).div_ceil(g) - 1;
         let mut bits = 1;
         if groups > 0 {
             while groups != 1 {
