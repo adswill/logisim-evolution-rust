@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+mod examples;
 mod model;
 mod numfmt;
 mod paint;
