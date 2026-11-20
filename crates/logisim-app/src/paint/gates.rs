@@ -45,6 +45,9 @@ pub fn painter(part: &str) -> Option<&'static dyn PartPainter> {
             inverting: true,
             controlled: true,
         },
+        "Odd Parity" => &LabelBox { title: "2k+1" },
+        "Even Parity" => &LabelBox { title: "2k" },
+        "PLA" => &LabelBox { title: "PLA" },
         _ => return None,
     })
 }
@@ -183,5 +186,38 @@ impl PartPainter for BufferPainter {
     }
     fn bounds(&self, v: &PartView) -> (f32, f32, f32, f32) {
         union((-32.0, -12.0, 2.0, 12.0), port_bounds(v, 4.0))
+    }
+}
+
+/// Plain labelled rectangle spanning the ports (parity gates, PLA).
+struct LabelBox {
+    title: &'static str,
+}
+
+impl LabelBox {
+    fn rect(&self, v: &PartView) -> (f32, f32, f32, f32) {
+        let b = port_bounds(v, 0.0);
+        if self.title == "PLA" {
+            (b.0, b.1 - 10.0, b.2, b.3 + 30.0)
+        } else {
+            (b.0, b.1 - 10.0, 0.0, b.3 + 10.0)
+        }
+    }
+}
+
+impl PartPainter for LabelBox {
+    fn paint(&self, g: &Gfx, v: &PartView) {
+        let r = self.rect(v);
+        g.rect((r.0, r.1), (r.2, r.3), Some(g.theme.fill), g.theme.stroke);
+        g.text(
+            ((r.0 + r.2) / 2.0, (r.1 + r.3) / 2.0),
+            eframe::egui::Align2::CENTER_CENTER,
+            self.title,
+            11.0,
+            g.theme.text,
+        );
+    }
+    fn bounds(&self, v: &PartView) -> (f32, f32, f32, f32) {
+        union(self.rect(v), port_bounds(v, 0.0))
     }
 }
