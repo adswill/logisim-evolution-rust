@@ -1,9 +1,9 @@
 //! Logging UI: timing diagram, logging settings/file output, and the test-vector runner.
 //!
-//! The editor owns one [`LogUi`] and calls [`LogUi::update`] once per frame with a
-//! [`LogContext`]; [`LogUi::menu_items`] adds the window toggles to a menu. Nothing else of the
-//! editor is needed here.
+//! The three windows (timing diagram, logging settings, test vectors) are `AppWindow`s, registered
+//! by [`register`] and sharing one [`LogUi`] (one recording session). See `windows.rs`.
 
+mod adapters;
 mod session;
 mod vectors;
 mod waveform;
@@ -17,7 +17,10 @@ use std::time::Duration;
 use vectors::VectorPanel;
 use waveform::WaveState;
 
-/// What the logging windows need from the editor each frame.
+pub use adapters::register;
+
+/// What the logging windows need from the editor each frame (test driver only).
+#[cfg(test)]
 pub struct LogContext<'a> {
     pub project: &'a ProjectFile,
     /// Name of the circuit being edited and simulated.
@@ -31,9 +34,14 @@ pub struct LogContext<'a> {
 
 #[derive(Default)]
 pub struct LogUi {
+    #[cfg(test)]
     show_wave: bool,
+    #[cfg(test)]
     show_log: bool,
+    #[cfg(test)]
     show_vectors: bool,
+    /// Last frame number `observe` ran for (so two open windows sample once per frame).
+    pub(crate) last_observed: u64,
     session: Option<(String, LogSession)>,
     wave: WaveState,
     vectors: VectorPanel,
@@ -61,43 +69,9 @@ impl LogUi {
         LogUi::default()
     }
 
-    /// Window toggles for a menu (e.g. "View" or "Simulate").
-    pub fn menu_items(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.show_wave, "Timing diagram");
-        ui.checkbox(&mut self.show_log, "Logging settings");
-        ui.checkbox(&mut self.show_vectors, "Test vectors");
-    }
-
-    /// Record the simulation and draw whichever windows are open.
-    pub fn update(&mut self, ctx: &egui::Context, cx: LogContext<'_>) {
-        let LogContext {
-            project,
-            circuit,
-            sim,
-            ticks,
-        } = cx;
-        let Some(def) = project.circuit(circuit) else {
-            return;
-        };
-        let wanted = self.show_wave || self.show_log;
-        let stale = self
-            .session
-            .as_ref()
-            .is_none_or(|(n, s)| n != circuit || !s.matches(def));
-        if wanted && stale {
-            let mut sim = sim;
-            self.session = Some((
-                circuit.to_string(),
-                LogSession::new(def, sim.as_deref_mut()),
-            ));
-            self.wave = WaveState::default();
-            self.note = None;
-            return self.update_inner(ctx, project, circuit, sim, ticks);
-        }
-        self.update_inner(ctx, project, circuit, sim, ticks);
-    }
-
-    fn update_inner(
+    /// Create or refresh the recording session for `circuit` and sample the live simulation.
+    /// Call once per frame while the timing diagram or logging settings are visible.
+    pub fn observe(
         &mut self,
         ctx: &egui::Context,
         project: &ProjectFile,
@@ -105,62 +79,100 @@ impl LogUi {
         mut sim: Option<&mut Circuit>,
         ticks: u64,
     ) {
+        let Some(def) = project.circuit(circuit) else {
+            return;
+        };
+        let stale = self
+            .session
+            .as_ref()
+            .is_none_or(|(n, s)| n != circuit || !s.matches(def));
+        if stale {
+            self.session = Some((
+                circuit.to_string(),
+                LogSession::new(def, sim.as_deref_mut()),
+            ));
+            self.wave = WaveState::default();
+            self.note = None;
+        }
         if let (Some((_, s)), Some(c)) = (self.session.as_mut(), sim.as_deref_mut()) {
             s.observe(c, ticks);
             if s.settings.timing == Timing::RealTime {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
-        let live = sim.is_some();
+    }
 
+    /// Contents of the timing-diagram window.
+    pub fn timing_ui(&mut self, ui: &mut egui::Ui, live: bool) {
+        match self.session.as_mut() {
+            Some((_, s)) => {
+                if !live {
+                    ui.weak("Simulation is off. Turn on Simulate to record signals.");
+                }
+                let w = ui.available_width() - 178.0;
+                waveform::toolbar(ui, &s.model, &mut self.wave, w);
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        waveform::show(ui, &s.model, &mut self.wave);
+                    });
+            }
+            None => {
+                ui.label("Nothing recorded yet.");
+            }
+        }
+    }
+
+    /// Contents of the logging-settings window.
+    pub fn settings_ui(&mut self, ui: &mut egui::Ui, sim: Option<&mut Circuit>) {
+        let note = &mut self.note;
+        if let Some((_, s)) = self.session.as_mut() {
+            log_settings(ui, s, sim, note);
+        }
+    }
+
+    /// Contents of the test-vector window.
+    pub fn vectors_ui(&mut self, ui: &mut egui::Ui, project: &ProjectFile, circuit: &str) {
+        self.vectors.show(ui, project, circuit);
+    }
+
+    /// Self-contained driver used by the tests: records and draws the windows whose `show_*`
+    /// flags are set. The editor itself uses the `AppWindow` adapters in [`register`].
+    #[cfg(test)]
+    pub fn update(&mut self, ctx: &egui::Context, cx: LogContext<'_>) {
+        let LogContext {
+            project,
+            circuit,
+            mut sim,
+            ticks,
+        } = cx;
+        if self.show_wave || self.show_log {
+            self.observe(ctx, project, circuit, sim.as_deref_mut(), ticks);
+        }
+        let live = sim.is_some();
         if self.show_wave {
             let mut open = true;
             egui::Window::new("Timing diagram")
                 .open(&mut open)
                 .default_size([760.0, 320.0])
-                .show(ctx, |ui| match self.session.as_mut() {
-                    Some((_, s)) => {
-                        if !live {
-                            ui.weak("Simulation is off. Turn on Simulate to record signals.");
-                        }
-                        let w = ui.available_width() - 178.0;
-                        waveform::toolbar(ui, &s.model, &mut self.wave, w);
-                        ui.separator();
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                waveform::show(ui, &s.model, &mut self.wave);
-                            });
-                    }
-                    None => {
-                        ui.label("Nothing recorded yet.");
-                    }
-                });
+                .show(ctx, |ui| self.timing_ui(ui, live));
             self.show_wave = open;
         }
         if self.show_log {
             let mut open = true;
-            let note = &mut self.note;
-            let session = self.session.as_mut().map(|(_, s)| s);
             egui::Window::new("Logging settings")
                 .open(&mut open)
                 .default_size([420.0, 480.0])
-                .show(ctx, |ui| {
-                    if let Some(s) = session {
-                        log_settings(ui, s, sim, note);
-                    }
-                });
+                .show(ctx, |ui| self.settings_ui(ui, sim.as_deref_mut()));
             self.show_log = open;
         }
         if self.show_vectors {
             let mut open = true;
-            let vectors = &mut self.vectors;
             egui::Window::new("Test vectors")
                 .open(&mut open)
                 .default_size([640.0, 420.0])
-                .show(ctx, |ui| {
-                    vectors.show(ui, project, circuit);
-                });
+                .show(ctx, |ui| self.vectors_ui(ui, project, circuit));
             self.show_vectors = open;
         }
     }
