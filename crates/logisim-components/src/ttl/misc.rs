@@ -171,11 +171,256 @@ pub fn chip_744075() -> Ttl {
     })
 }
 
+/// 7487: 4-bit true/complement, zero/one element. C = 1, B = 8, A1..A4 = 2,5,10,13,
+/// Y1..Y4 = 3,6,9,12. B high: Y = !C; B low: C high → Y = A, C low → Y = !A.
+pub fn chip_7487() -> Ttl {
+    let spec = Spec::new("7487", 14, &[3, 6, 9, 12]).unused(&[4, 11]);
+    Ttl::new(spec, |p| {
+        let (b, c) = (p.get(8), p.get(1));
+        for (a, y) in [(2u8, 3u8), (5, 6), (10, 9), (13, 12)] {
+            let v = match (b, c) {
+                (Value::TRUE, _) => !c,
+                (Value::FALSE, Value::TRUE) => p.get(a),
+                (Value::FALSE, Value::FALSE) => !p.get(a),
+                _ => Value::ERROR,
+            };
+            p.set(y, v, 1);
+        }
+    })
+}
+
+/// 74182: look-ahead carry generator. /G0../G3 = 3,1,14,5; /P0../P3 = 4,2,15,6; Cn = 13;
+/// outputs /P = 7, /G = 10, Cn+x = 12, Cn+y = 11, Cn+z = 9.
+pub fn chip_74182() -> Ttl {
+    let spec = Spec::new("74182", 16, &[7, 10, 12, 11, 9]);
+    Ttl::new(spec, |p| {
+        let pp = [!p.hi(4), !p.hi(2), !p.hi(15), !p.hi(6)];
+        let g = [!p.hi(3), !p.hi(1), !p.hi(14), !p.hi(5)];
+        let ci = p.hi(13);
+        let po = pp[3] && pp[2] && pp[1] && pp[0];
+        let go = g[3]
+            || (pp[3] && g[2])
+            || (pp[3] && pp[2] && g[1])
+            || (pp[3] && pp[2] && pp[1] && g[0]);
+        let cx = g[0] || (pp[0] && ci);
+        let cy = g[1] || (pp[1] && g[0]) || (pp[1] && pp[0] && ci);
+        let cz = g[2] || (pp[2] && g[1]) || (pp[2] && pp[1] && g[0]) || (pp[2] && pp[1] && pp[0] && ci);
+        p.set_bool(7, !po, 1);
+        p.set_bool(10, !go, 1);
+        p.set_bool(12, cx, 1);
+        p.set_bool(11, cy, 1);
+        p.set_bool(9, cz, 1);
+    })
+}
+
+/// PAL-style AND-OR plane from Logisim's ALU ports (active-low result): `products` are bit masks
+/// over `inputs`.
+fn pal(inputs: &[bool], products: &[u32]) -> bool {
+    let or = products.iter().any(|&prod| {
+        (0..32).all(|j| prod & (1 << j) == 0 || inputs.get(j).copied().unwrap_or(false))
+    });
+    !or
+}
+
+/// 74181: 4-bit ALU / function generator (active-high data). A0..A3 = 2,23,21,19;
+/// B0..B3 = 1,22,20,18; S0..S3 = 6,5,4,3; Cn = 7; M = 8; F0..F3 = 9,10,11,13; A=B = 14
+/// (open collector); Cn+4 = 16; P = 15; G = 17.
+pub fn chip_74181() -> Ttl {
+    let spec = Spec::new("74181", 24, &[9, 10, 11, 13, 14, 15, 16, 17]);
+    Ttl::new(spec, |p| {
+        let a: Vec<bool> = [2u8, 23, 21, 19].iter().map(|&x| p.hi(x)).collect();
+        let b: Vec<bool> = [1u8, 22, 20, 18].iter().map(|&x| p.hi(x)).collect();
+        let s: Vec<bool> = [6u8, 5, 4, 3].iter().map(|&x| p.hi(x)).collect();
+        let (ci, m) = (p.hi(7), p.hi(8));
+        let mut l1 = vec![];
+        l1.extend(&a);
+        l1.extend(&b);
+        l1.extend(b.iter().map(|x| !x));
+        l1.extend(&s);
+        let x: Vec<bool> = [
+            [0x0000_8011u32, 0x0000_4101],
+            [0x0000_8022, 0x0000_4202],
+            [0x0000_8044, 0x0000_4404],
+            [0x0000_8088, 0x0000_4808],
+        ]
+        .iter()
+        .map(|t| pal(&l1, t))
+        .collect();
+        let y: Vec<bool> = [
+            [0x0000_2100u32, 0x0000_1010, 0x0000_0001],
+            [0x0000_2200, 0x0000_1020, 0x0000_0002],
+            [0x0000_2400, 0x0000_1040, 0x0000_0004],
+            [0x0000_2800, 0x0000_1080, 0x0000_0008],
+        ]
+        .iter()
+        .map(|t| pal(&l1, t))
+        .collect();
+        let mut l2 = vec![];
+        l2.extend(&x);
+        l2.extend(&y);
+        l2.push(!m);
+        l2.push(ci);
+        let z = [
+            pal(&l2, &[0x300]),
+            pal(&l2, &[0x301, 0x110]),
+            pal(&l2, &[0x303, 0x112, 0x120]),
+            pal(&l2, &[0x307, 0x116, 0x124, 0x140]),
+        ];
+        let pp = pal(&l2, &[0x0f]);
+        let g = pal(&l2, &[0x80, 0x48, 0x2c, 0x1e]);
+        let co = !pal(&l2, &[0x20f]) || !g;
+        let f: Vec<bool> = (0..4).map(|i| x[i] ^ y[i] ^ z[i]).collect();
+        let eq = f.iter().all(|&v| v);
+        p.set_bool(15, pp, 1);
+        p.set_bool(17, g, 1);
+        p.set_bool(16, co, 1);
+        p.set_open(14, eq, 1);
+        for (pin, v) in [(13u8, f[3]), (11, f[2]), (10, f[1]), (9, f[0])] {
+            p.set_bool(pin, v, 1);
+        }
+    })
+}
+
+/// 74381: 4-bit ALU/function generator. A0..A3 = 3,1,19,17; B0..B3 = 4,2,18,16;
+/// S0..S2 = 5,6,7; Cn = 15; F0..F3 = 8,9,11,12; /P = 14; /G = 13.
+/// S: 000 clear, 001 B−A, 010 A−B, 011 A+B, 100 XOR, 101 OR, 110 AND, 111 preset.
+pub fn chip_74381() -> Ttl {
+    let spec = Spec::new("74381", 20, &[8, 9, 11, 12, 13, 14]);
+    Ttl::new(spec, |p| {
+        let a: Vec<bool> = [3u8, 1, 19, 17].iter().map(|&x| p.hi(x)).collect();
+        let b: Vec<bool> = [4u8, 2, 18, 16].iter().map(|&x| p.hi(x)).collect();
+        let (s0, s1, s2) = (p.hi(5), p.hi(6), p.hi(7));
+        let ci = p.hi(15);
+        let u = s0 || s1;
+        let v = s1 || s2;
+        let w = s0 || !s1;
+        let x = !(s0 && s1) || s2;
+        let y = (s0 && s1) || !s2;
+        let z = !s2 && u;
+        let mut l1 = vec![];
+        l1.extend(&a);
+        l1.extend(a.iter().map(|q| !q));
+        l1.extend(&b);
+        l1.extend(b.iter().map(|q| !q));
+        l1.extend([y, x, w, v, u]);
+        let j: Vec<bool> = [
+            [0x000c_1010u32, 0x0016_1001, 0x000a_0110],
+            [0x000c_2020, 0x0016_2002, 0x000a_0220],
+            [0x000c_4040, 0x0016_4004, 0x000a_0440],
+            [0x000c_8080, 0x0016_8008, 0x000a_0880],
+        ]
+        .iter()
+        .map(|t| pal(&l1, t))
+        .collect();
+        let k: Vec<bool> = [
+            [0x0013_1010u32, 0x000c_1001, 0x000c_0110, 0x0012_0101],
+            [0x0013_2020, 0x000c_2002, 0x000c_0220, 0x0012_0202],
+            [0x0013_4040, 0x000c_4004, 0x000c_0440, 0x0012_0404],
+            [0x0013_8080, 0x000c_8008, 0x000c_0880, 0x0012_0808],
+        ]
+        .iter()
+        .map(|t| pal(&l1, t))
+        .collect();
+        let mut l2 = vec![];
+        l2.extend(&j);
+        l2.extend(&k);
+        l2.push(z);
+        l2.push(ci);
+        let l = [
+            pal(&l2, &[0x300]),
+            pal(&l2, &[0x301, 0x111]),
+            pal(&l2, &[0x303, 0x113, 0x122]),
+            pal(&l2, &[0x307, 0x117, 0x126, 0x144]),
+        ];
+        let pp = pal(&l2, &[0x0f]);
+        let g = pal(&l2, &[0x88, 0x4c, 0x2e, 0x1f]);
+        p.set_bool(14, pp, 1);
+        p.set_bool(13, g, 1);
+        for (pin, i) in [(12u8, 3usize), (11, 2), (9, 1), (8, 0)] {
+            p.set_bool(pin, l[i] ^ k[i], 1);
+        }
+    })
+}
+
+fn combine_levels(selected: Value, idle: Value) -> Value {
+    if selected == idle {
+        selected
+    } else if selected == Value::ERROR || idle == Value::ERROR {
+        Value::ERROR
+    } else if selected.is_fully_defined() && idle.is_fully_defined() {
+        Value::ERROR
+    } else {
+        Value::UNKNOWN
+    }
+}
+
+/// 74259: 8-bit addressable latch. A0..A2 = 1,2,3; D = 13; /LE = 14; /MR = 15;
+/// Q0..Q3 = 4..7, Q4..Q7 = 9..12.
+pub fn chip_74259() -> Ttl {
+    const Q: [u8; 8] = [4, 5, 6, 7, 9, 10, 11, 12];
+    let spec = Spec::new("74259", 16, &Q);
+    let mut st = [Value::FALSE; 8];
+    Ttl::new(spec, move |p| {
+        let (mr, le) = (p.get(15), p.get(14));
+        let write = |p: &Pins, st: &mut [Value; 8], clear_unselected: bool| {
+            let d = p.get(13);
+            for (i, s) in st.iter_mut().enumerate() {
+                let idle = if clear_unselected { Value::FALSE } else { *s };
+                let addr = [1u8, 2, 3].map(|a| p.get(a));
+                let excluded = addr.iter().enumerate().any(|(place, v)| {
+                    let want = (i >> place) & 1 == 1;
+                    (want && *v == Value::FALSE) || (!want && *v == Value::TRUE)
+                });
+                let known = addr.iter().all(|v| *v == Value::TRUE || *v == Value::FALSE);
+                *s = if excluded {
+                    idle
+                } else if known {
+                    d
+                } else {
+                    combine_levels(d, idle)
+                };
+            }
+        };
+        if mr == Value::FALSE && le == Value::TRUE {
+            st = [Value::FALSE; 8];
+        } else if mr == Value::FALSE && le == Value::FALSE {
+            write(p, &mut st, true);
+        } else if mr == Value::TRUE && le == Value::FALSE {
+            write(p, &mut st, false);
+        }
+        for (i, &q) in Q.iter().enumerate() {
+            p.set(q, st[i], 1);
+        }
+    })
+}
+
+/// 74670: 4×4 register file with tri-state outputs. D1..D4 = 15,1,2,3; write address
+/// WB,WA = 13,14; read address RB,RA = 4,5; /WE = 12; /RE = 11; Q1..Q4 = 10,9,7,6.
+/// Writing is level-sensitive while /WE is low.
+pub fn chip_74670() -> Ttl {
+    let spec = Spec::new("74670", 16, &[10, 9, 7, 6]);
+    let mut words = [[Value::FALSE; 4]; 4];
+    Ttl::new(spec, move |p| {
+        let addr = |msb: u8, lsb: u8| (p.hi(msb) as usize) << 1 | p.hi(lsb) as usize;
+        if p.lo(12) {
+            let w = addr(13, 14);
+            words[w] = [p.get(15), p.get(1), p.get(2), p.get(3)];
+        }
+        let r = addr(4, 5);
+        let on = p.lo(11);
+        for (i, &q) in [10u8, 9, 7, 6].iter().enumerate() {
+            p.set(q, if on { words[r][i] } else { Value::UNKNOWN }, 1);
+        }
+    })
+}
+
 pub fn parts() -> Vec<PartDesc> {
     chips! {
         "7447" => chip_7447, "7485" => chip_7485, "74257" => chip_74257,
         "74266" => chip_74266, "74283" => chip_74283, "74688" => chip_74688,
-        "744075" => chip_744075, "747266" => chip_747266,
+        "744075" => chip_744075, "747266" => chip_747266, "7487" => chip_7487,
+        "74181" => chip_74181, "74182" => chip_74182, "74259" => chip_74259,
+        "74381" => chip_74381, "74670" => chip_74670,
     }
 }
 
@@ -271,5 +516,115 @@ mod tests {
         assert!(!r.hi(4));
         r.put(15, true);
         assert_eq!(r.get(4), Value::UNKNOWN);
+    }
+
+    fn alu181(r: &mut Rig, a: u64, b: u64, s: u64, m: bool, cn: bool) -> u64 {
+        r.put_n(&[2, 23, 21, 19], a);
+        r.put_n(&[1, 22, 20, 18], b);
+        r.put_n(&[6, 5, 4, 3], s);
+        r.put(8, m);
+        r.put(7, cn);
+        r.read_n(&[9, 10, 11, 13]).unwrap()
+    }
+
+    #[test]
+    fn alu_74181() {
+        let mut r = Rig::new(chip_74181());
+        for a in 0..16u64 {
+            for b in [0u64, 3, 9, 15] {
+                assert_eq!(alu181(&mut r, a, b, 0b0000, true, true), !a & 15, "NOT A");
+                assert_eq!(alu181(&mut r, a, b, 0b0110, true, true), a ^ b, "XOR");
+                assert_eq!(alu181(&mut r, a, b, 0b1011, true, true), a & b, "AND");
+                assert_eq!(alu181(&mut r, a, b, 0b1110, true, true), a | b, "OR");
+                assert_eq!(alu181(&mut r, a, b, 0b1001, false, true), (a + b) & 15, "A+B");
+                assert_eq!(alu181(&mut r, a, b, 0b1001, false, false), (a + b + 1) & 15, "A+B+1");
+                assert_eq!(alu181(&mut r, a, b, 0b0110, false, true), a.wrapping_sub(b).wrapping_sub(1) & 15, "A-B-1");
+            }
+        }
+    }
+
+    #[test]
+    fn alu_74381() {
+        let mut r = Rig::new(chip_74381());
+        let mut run = |a: u64, b: u64, s: u64, ci: bool| {
+            r.put_n(&[3, 1, 19, 17], a);
+            r.put_n(&[4, 2, 18, 16], b);
+            r.put_n(&[5, 6, 7], s);
+            r.put(15, ci);
+            r.read_n(&[8, 9, 11, 12]).unwrap()
+        };
+        for a in 0..16u64 {
+            for b in [0u64, 5, 15] {
+                assert_eq!(run(a, b, 0, false), 0, "clear");
+                assert_eq!(run(a, b, 3, false), (a + b) & 15, "add");
+                assert_eq!(run(a, b, 3, true), (a + b + 1) & 15, "add+ci");
+                assert_eq!(run(a, b, 4, false), a ^ b, "xor");
+                assert_eq!(run(a, b, 5, false), a | b, "or");
+                assert_eq!(run(a, b, 6, false), a & b, "and");
+                assert_eq!(run(a, b, 7, false), 15, "preset");
+                assert_eq!(run(a, b, 2, true), (a.wrapping_sub(b)) & 15, "a-b with carry");
+                assert_eq!(run(a, b, 1, true), (b.wrapping_sub(a)) & 15, "b-a with carry");
+            }
+        }
+    }
+
+    #[test]
+    fn lookahead_and_true_complement() {
+        let mut r = Rig::new(chip_74182());
+        // all propagate/generate inactive (active low inputs high): carries follow Cn
+        for p in [3, 1, 14, 5, 4, 2, 15, 6] {
+            r.put(p, true);
+        }
+        r.put(13, true);
+        assert!(!r.hi(12) && !r.hi(11) && !r.hi(9));
+        r.put(4, false); // /P0 active
+        assert!(r.hi(12)); // Cn+x = P0 & Cn
+        r.put(3, false); // /G0 active
+        assert!(r.hi(12) && r.hi(11) == false);
+        let mut r = Rig::new(chip_7487());
+        r.put(8, false);
+        r.put(1, true);
+        r.put(2, true);
+        assert!(r.hi(3)); // true
+        r.put(1, false);
+        assert!(!r.hi(3)); // complement
+        r.put(8, true);
+        r.put(1, false);
+        assert!(r.hi(3)); // B high: !C
+    }
+
+    #[test]
+    fn addressable_latch_and_register_file() {
+        let q = [4u8, 5, 6, 7, 9, 10, 11, 12];
+        let mut r = Rig::new(chip_74259());
+        r.put(15, true); // MR high
+        r.put(14, true); // LE high: hold
+        r.put(13, true);
+        r.put_n(&[1, 2, 3], 5);
+        r.put(14, false); // latch bit 5 = 1
+        r.put(14, true);
+        assert_eq!(r.read_n(&q), Some(1 << 5));
+        r.put_n(&[1, 2, 3], 2);
+        r.put(14, false);
+        r.put(14, true);
+        assert_eq!(r.read_n(&q), Some((1 << 5) | (1 << 2)));
+        r.put(15, false); // clear
+        assert_eq!(r.read_n(&q), Some(0));
+
+        let mut r = Rig::new(chip_74670());
+        r.put(12, true);
+        r.put(11, false);
+        for w in 0..4u64 {
+            r.put_n(&[14, 13], w);
+            r.put_n(&[15, 1, 2, 3], w + 5);
+            r.put(12, false);
+            r.put(12, true);
+        }
+        for w in 0..4u64 {
+            r.put_n(&[5, 4], w);
+            assert_eq!(r.read_n(&[10, 9, 7, 6]), Some(w + 5));
+        }
+        r.put(11, true);
+        assert_eq!(r.get(10), Value::UNKNOWN);
     }
 }
