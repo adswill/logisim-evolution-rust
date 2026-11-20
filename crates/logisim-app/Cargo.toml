@@ -7,3 +7,7 @@ authors.workspace = true
 
 [dependencies]
 eframe.workspace = true
+logisim-core = { path = "../logisim-core" }
+logisim-components = { path = "../logisim-components" }
+logisim-format = { path = "../logisim-format" }
+rfd = "0.17"
