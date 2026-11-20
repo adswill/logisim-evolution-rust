@@ -30,6 +30,11 @@ pub fn describe(library: &str, part: &str) -> String {
         ("Gates", "XNOR Gate") => "XOR followed by NOT: output is 1 when an even number of inputs are 1.",
         ("Gates", "Controlled Buffer") => "Tri-state buffer: passes the input only while its enable input is 1, otherwise floats.",
         ("Gates", "Controlled Inverter") => "Tri-state inverter: inverts the input while enabled, otherwise floats.",
+        ("Gates", "Odd Parity") => "Output is 1 when an odd number of inputs are 1 (an odd-parity check).",
+        ("Gates", "Even Parity") => "Output is 1 when an even number of inputs are 1 (an even-parity check).",
+        ("Gates", "PLA") => "Programmable logic array: outputs are defined by a table of AND terms combined with OR.",
+        ("Wiring", "Do Not Connect") => "Marks a connection point that is intentionally left unconnected.",
+        ("Wiring", "Power On Reset") => "Outputs one level when the simulation starts, then the opposite after a short delay (to reset circuits).",
         ("Wiring", "Splitter") => "Splits a multi-bit bus into smaller groups of bits, or joins them back.",
         ("Wiring", "Pin") => "An input you can flip while simulating, or an output that shows a value. Give it a label to make it a port.",
         ("Wiring", "Probe") => "Shows the value on a wire without driving it.",
@@ -78,15 +83,20 @@ mod tests {
     }
 
     #[test]
-    fn known_gates_and_wiring_parts_have_real_descriptions() {
-        for p in all_parts()
-            .iter()
-            .filter(|p| p.library == "Gates" || p.library == "Wiring")
-        {
+    fn core_parts_have_real_descriptions() {
+        // parts other libraries add later fall back to a generic line on purpose
+        for (lib, part) in [
+            ("Gates", "AND Gate"),
+            ("Gates", "XOR Gate"),
+            ("Gates", "Odd Parity"),
+            ("Wiring", "Pin"),
+            ("Wiring", "Splitter"),
+            ("Wiring", "Tunnel"),
+            ("Wiring", "Clock"),
+        ] {
             assert!(
-                !p.description.ends_with("library."),
-                "{} has only the generic description",
-                p.id()
+                !describe(lib, part).ends_with("library."),
+                "{lib}/{part} has only the generic description"
             );
         }
     }

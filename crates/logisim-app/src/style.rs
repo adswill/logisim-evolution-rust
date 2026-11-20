@@ -13,6 +13,7 @@ pub const SP3: f32 = 12.0;
 pub const SP4: f32 = 16.0;
 /// Smallest clickable control height (WCAG 2.2 target size, comfortable for a mouse).
 pub const MIN_TARGET: f32 = 28.0;
+const _: () = assert!(MIN_TARGET >= 24.0, "WCAG 2.2 minimum target size");
 
 /// Resolve "follow system" into a concrete theme.
 pub fn resolve(choice: ThemeChoice, ctx: &egui::Context) -> ThemeMode {
@@ -153,7 +154,6 @@ mod tests {
 
     #[test]
     fn scale_tokens_are_consistent() {
-        assert!(MIN_TARGET >= 24.0, "WCAG 2.2 minimum target size");
         assert_eq!([SP1, SP2, SP3, SP4], [4.0, 8.0, 12.0, 16.0]);
     }
 
