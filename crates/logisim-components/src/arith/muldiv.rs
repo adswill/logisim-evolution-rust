@@ -1,6 +1,6 @@
 //! Multiplier, Divider, Exponentiator and Square Root.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, is_absent, raw, sext, undefined_like, Sign, SignOptions, WidthOptions};
 
@@ -132,6 +132,9 @@ impl Component for Multiplier {
     fn name(&self) -> &str {
         "Multiplier"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), OptionSpec::choice("mode", "Number type", &["signed", "signed_unsigned", "unsigned"], "unsigned")]
+    }
     fn options(&self) -> OptionMap {
         self.opts.width.options().with("mode", OptionMap::name_of(self.opts.mode, &MUL_MODES))
     }
@@ -217,6 +220,9 @@ impl Divider {
 impl Component for Divider {
     fn name(&self) -> &str {
         "Divider"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), super::sign_spec("unsigned")]
     }
     fn options(&self) -> OptionMap {
         self.opts.options()
@@ -333,6 +339,9 @@ impl Component for Exponentiator {
     fn name(&self) -> &str {
         "Exponentiator"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(32), super::sign_spec("unsigned")]
+    }
     fn options(&self) -> OptionMap {
         self.opts.options()
     }
@@ -379,6 +388,9 @@ impl SquareRoot {
 impl Component for SquareRoot {
     fn name(&self) -> &str {
         "Square Root"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8)]
     }
     fn options(&self) -> OptionMap {
         self.opts.options()

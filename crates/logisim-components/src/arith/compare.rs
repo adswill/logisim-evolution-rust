@@ -1,6 +1,6 @@
 //! Comparator and Min/Max.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, raw, sext, Sign, SignOptions};
 
@@ -32,6 +32,9 @@ impl Comparator {
 impl Component for Comparator {
     fn name(&self) -> &str {
         "Comparator"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), super::sign_spec("signed")]
     }
     fn options(&self) -> OptionMap {
         self.opts.options()
@@ -106,6 +109,9 @@ impl MinMax {
 impl Component for MinMax {
     fn name(&self) -> &str {
         "Min/Max"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), super::sign_spec("unsigned")]
     }
     fn options(&self) -> OptionMap {
         self.opts.options()

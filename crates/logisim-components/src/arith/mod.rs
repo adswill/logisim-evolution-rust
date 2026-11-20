@@ -8,7 +8,7 @@
 //! [`Absolute`], [`Comparator`], [`MinMax`], [`Shifter`], [`BitAdder`], [`BitFinder`],
 //! [`Exponentiator`], [`SquareRoot`]. Floating-point parts live in [`floating`].
 
-use logisim_core::{BitWidth, Component, OptionMap, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Value};
 
 use crate::registry::{Library, PartDesc};
 
@@ -52,6 +52,24 @@ impl WidthOptions {
         self.width = BitWidth::new(w);
         self
     }
+}
+
+pub(crate) fn width_spec(default: i64) -> OptionSpec {
+    OptionSpec::int("width", "Data bits", 1, 64, default)
+}
+
+pub(crate) fn sign_spec(default: &'static str) -> OptionSpec {
+    OptionSpec::choice("sign", "Number type", &["signed", "unsigned"], default)
+}
+
+/// Floating-point widths are 8, 16, 32 or 64 (other values are rejected with a clear message).
+pub(crate) fn fp_width_spec(key: &'static str) -> OptionSpec {
+    let label = match key {
+        "from_width" => "Input float bits (8/16/32/64)",
+        "to_width" => "Output float bits (8/16/32/64)",
+        _ => "Float bits (8/16/32/64)",
+    };
+    OptionSpec::int(key, label, 8, 64, 32)
 }
 
 pub(crate) const SIGNS: [(&str, Sign); 2] = [("signed", Sign::Signed), ("unsigned", Sign::Unsigned)];
@@ -246,6 +264,13 @@ mod tests {
             assert_eq!(fresh.ports(), part.ports(), "{}", p.name);
             assert_eq!(part.name(), p.name);
             assert!(!saved.is_empty() || p.name.is_empty(), "{} should save its options", p.name);
+        }
+    }
+
+    #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{}: {e}", p.name));
         }
     }
 

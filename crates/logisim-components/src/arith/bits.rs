@@ -1,6 +1,6 @@
 //! Bit-level arithmetic parts: Shifter, Bit Adder and Bit Finder.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, raw, sext, WidthOptions};
 
@@ -130,6 +130,9 @@ impl Component for Shifter {
     fn name(&self) -> &str {
         "Shifter"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), OptionSpec::choice("shift", "Shift type", &["logical_left", "logical_right", "arithmetic_right", "roll_left", "roll_right"], "logical_left")]
+    }
     fn options(&self) -> OptionMap {
         self.opts.width.options().with("shift", OptionMap::name_of(self.opts.kind, &SHIFT_KINDS))
     }
@@ -219,6 +222,9 @@ impl BitAdder {
 impl Component for BitAdder {
     fn name(&self) -> &str {
         "Bit Adder"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), OptionSpec::int("inputs", "Number of inputs", 1, 64, 1)]
     }
     fn options(&self) -> OptionMap {
         self.opts.width.options().with("inputs", self.opts.inputs)
@@ -329,6 +335,9 @@ const FINDS: [(&str, BitFinderType); 4] = [
 impl Component for BitFinder {
     fn name(&self) -> &str {
         "Bit Finder"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8), OptionSpec::choice("find", "Type", &["low_one", "high_one", "low_zero", "high_zero"], "low_one")]
     }
     fn options(&self) -> OptionMap {
         self.opts.width.options().with("find", OptionMap::name_of(self.opts.find, &FINDS))

@@ -8,7 +8,7 @@
 //! (-20,20), then inputs. Port 0 is always the primary output at (0,0). Inputs/outputs that are
 //! not wired up are unknown, so they read as NaN and raise `err`.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, raw, sext, Sign};
 use crate::registry::PartDesc;
@@ -484,6 +484,23 @@ impl Component for FpCalc {
     fn name(&self) -> &str {
         self.kind.name()
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        let mut specs = vec![super::fp_width_spec("width")];
+        let mode = match self.kind {
+            CalcKind::Multiplier(_) => Some((&["multiply", "fused_multiply_add"][..], "multiply")),
+            CalcKind::Exponentiator(_) => Some((&["arbitrary", "exp", "exp_minus_one"][..], "arbitrary")),
+            CalcKind::Logarithm(_) => {
+                Some((&["arbitrary_base", "natural_plus_one", "natural", "base10"][..], "arbitrary_base"))
+            }
+            CalcKind::Round(_) => Some((&["ceil", "floor", "round", "rint", "truncate"][..], "round")),
+            CalcKind::Trigonometry(_) => Some((&["trig", "inverse", "hyperbolic"][..], "trig")),
+            _ => None,
+        };
+        if let Some((names, default)) = mode {
+            specs.push(OptionSpec::choice("mode", "Mode", names, default));
+        }
+        specs
+    }
     fn options(&self) -> OptionMap {
         let m = OptionMap::new().with("width", self.width.get());
         match self.kind.mode_name() {
@@ -542,6 +559,9 @@ impl Component for FpConstant {
     fn name(&self) -> &str {
         "FP Constant"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::fp_width_spec("width"), OptionSpec::string("value", "Value", "0")]
+    }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get()).with("value", self.value.to_string())
     }
@@ -585,6 +605,9 @@ impl FpComparator {
 impl Component for FpComparator {
     fn name(&self) -> &str {
         "FP Comparator"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::fp_width_spec("width")]
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get())
@@ -637,6 +660,9 @@ impl FpClassifier {
 impl Component for FpClassifier {
     fn name(&self) -> &str {
         "FP Classifier"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::fp_width_spec("width")]
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get())
@@ -695,6 +721,9 @@ impl Component for FpToFp {
     fn name(&self) -> &str {
         "FP to FP"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::fp_width_spec("from_width"), super::fp_width_spec("to_width")]
+    }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("from_width", self.from.get()).with("to_width", self.to.get())
     }
@@ -745,6 +774,9 @@ impl FpToInt {
 impl Component for FpToInt {
     fn name(&self) -> &str {
         "FP to Int"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![OptionSpec::int("int_width", "Integer bits", 1, 64, 8), super::fp_width_spec("fp_width"), OptionSpec::choice("mode", "Rounding", &["ceil", "floor", "round", "rint", "truncate"], "round")]
     }
     fn options(&self) -> OptionMap {
         OptionMap::new()
@@ -800,6 +832,9 @@ impl IntToFp {
 impl Component for IntToFp {
     fn name(&self) -> &str {
         "Int to FP"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![OptionSpec::int("int_width", "Integer bits", 1, 64, 8), super::fp_width_spec("fp_width"), super::sign_spec("signed")]
     }
     fn options(&self) -> OptionMap {
         OptionMap::new()

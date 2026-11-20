@@ -1,6 +1,6 @@
 //! Adder, Subtractor, Negator and Absolute value.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{delay, is_absent, negate_bits, raw, sext, WidthOptions};
 
@@ -66,6 +66,9 @@ impl Component for Adder {
     fn name(&self) -> &str {
         "Adder"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8)]
+    }
     fn options(&self) -> OptionMap {
         self.opts.options()
     }
@@ -114,6 +117,9 @@ impl Component for Subtractor {
     fn name(&self) -> &str {
         "Subtractor"
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8)]
+    }
     fn options(&self) -> OptionMap {
         self.opts.options()
     }
@@ -155,6 +161,9 @@ impl Negator {
 impl Component for Negator {
     fn name(&self) -> &str {
         "Negator"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8)]
     }
     fn options(&self) -> OptionMap {
         self.opts.options()
@@ -202,6 +211,9 @@ impl Absolute {
 impl Component for Absolute {
     fn name(&self) -> &str {
         "Absolute Value"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![super::width_spec(8)]
     }
     fn options(&self) -> OptionMap {
         self.opts.options()
