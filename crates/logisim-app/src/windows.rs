@@ -75,6 +75,7 @@ pub fn registered_windows() -> Vec<Box<dyn AppWindow>> {
     reg.push(Box::new(ProjectInfoWindow));
     reg.push(Box::new(crate::analyze_ui::AnalysisWindow::default()));
     crate::log_ui::register(&mut reg);
+    crate::tools::register(&mut reg);
     reg
 }
 
