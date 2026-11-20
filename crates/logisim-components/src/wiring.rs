@@ -4,6 +4,9 @@
 //! Ports are listed for the east-facing orientation; `Circuit` rotates them.
 
 use crate::registry::{Library, PartDesc};
+
+mod extras;
+pub use extras::{DoNotConnect, PorTransition, PowerOnReset};
 use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -24,6 +27,8 @@ pub fn library() -> Library {
             part("Ground", || Box::new(Ground::new(1))),
             part("Transistor", || Box::new(Transistor::new(TransistorType::P, 1))),
             part("Transmission Gate", || Box::new(TransmissionGate::new(1))),
+            part("Do Not Connect", || Box::new(DoNotConnect::new(1))),
+            part("Power On Reset", || Box::new(PowerOnReset::new(PorTransition::HighToLow, 2))),
             part("Bit Extender", || Box::new(BitExtender::new(8, 16, ExtendKind::Zero))),
         ],
     }
@@ -1187,7 +1192,7 @@ mod tests {
     #[test]
     fn registry_builds_every_part() {
         let lib = library();
-        assert_eq!(lib.parts.len(), 12);
+        assert_eq!(lib.parts.len(), 14);
         for p in &lib.parts {
             assert_eq!((p.make)().name(), p.name);
         }
