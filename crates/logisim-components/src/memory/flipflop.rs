@@ -6,7 +6,7 @@
 //! the clock is at (-40,0) (one data input) or (-40,10) (two); clear (-10,30); preset (-30,30).
 //! Clear (asynchronous reset to 0) has priority over preset.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{ClockState, Startup, Trigger, FLIPFLOP_DELAY, STARTUPS, TRIGGERS};
 
@@ -153,6 +153,17 @@ impl Component for FlipFlop {
         self.kind.name()
     }
 
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        let triggers: &[&str] = if self.kind.allows_level_trigger() {
+            &["rising", "falling", "high", "low"]
+        } else {
+            &["rising", "falling"]
+        };
+        vec![
+            OptionSpec::choice("trigger", "Trigger", triggers, "rising"),
+            OptionSpec::choice("startup", "Value at power-on", &["zero", "unknown"], "zero"),
+        ]
+    }
     fn options(&self) -> OptionMap {
         OptionMap::new()
             .with("trigger", OptionMap::name_of(self.opts.trigger, &TRIGGERS))

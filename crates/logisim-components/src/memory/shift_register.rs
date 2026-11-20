@@ -8,7 +8,7 @@
 //! Stage 0 holds the newest bit; the serial output is the oldest stage (`length-1`).
 //! Shift enable is active unless exactly 0. Clear dominates; load dominates shifting.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::register::initial;
 use super::{ClockState, Startup, Trigger, SHIFT_DELAY, STARTUPS, TRIGGERS};
@@ -107,6 +107,15 @@ impl Component for ShiftRegister {
         "Shift Register"
     }
 
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::int("length", "Number of stages", 1, 64, 8),
+            OptionSpec::boolean("parallel", "Parallel load", true),
+            OptionSpec::choice("trigger", "Trigger", &["rising", "falling"], "rising"),
+            OptionSpec::choice("startup", "Value at power-on", &["zero", "unknown"], "zero"),
+        ]
+    }
     fn options(&self) -> OptionMap {
         let o = &self.opts;
         OptionMap::new()

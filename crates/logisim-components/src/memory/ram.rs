@@ -7,7 +7,7 @@
 //! or asynchronous (level-triggered) writes, read-after-write or write-after-read, optional
 //! asynchronous read, and a bidirectional or separate data bus.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PropagateCtx, Value};
 
 use super::contents::MemContents;
 use super::mem::{
@@ -333,6 +333,28 @@ impl Ram {
 impl Component for Ram {
     fn name(&self) -> &str {
         "RAM"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("addr_bits", "Address bits", 2, 24, 8),
+            OptionSpec::int("data_bits", "Data bits", 1, 64, 8),
+            OptionSpec::choice("enables", "Write enables", &["byte", "line"], "byte"),
+            OptionSpec::choice("ram_type", "Contents at reset", &["volatile", "nonvolatile"], "volatile"),
+            OptionSpec::boolean("clear_pin", "Clear input", false),
+            OptionSpec::choice("trigger", "Trigger", &["rising", "falling", "high", "low"], "rising"),
+            OptionSpec::boolean("async_read", "Asynchronous read", false),
+            OptionSpec::choice(
+                "read_behavior",
+                "Read on write cycle",
+                &["read_after_write", "write_after_read"],
+                "read_after_write",
+            ),
+            OptionSpec::boolean("byte_enables", "Byte enables (words over 8 bits)", false),
+            OptionSpec::choice("bus", "Data bus", &["separate", "separate_controlled", "bidir"], "separate"),
+            OptionSpec::choice("line", "Words per access (line enables)", &["single", "dual", "quad", "octo"], "single"),
+            OptionSpec::boolean("allow_misaligned", "Allow misaligned access", false),
+            OptionSpec::string("contents", "Contents (hex words, kept if non-volatile)", ""),
+        ]
     }
     fn options(&self) -> OptionMap {
         let o = &self.opts;

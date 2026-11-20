@@ -154,6 +154,13 @@ mod tests {
     }
 
     #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{e}"));
+        }
+    }
+
+    #[test]
     fn options_change_ports_and_reject_bad_values() {
         use logisim_core::OptionMap;
         let mut sr = ShiftRegister::new(ShiftRegisterOptions::default());

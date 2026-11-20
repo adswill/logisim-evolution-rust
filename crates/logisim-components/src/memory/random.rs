@@ -5,7 +5,7 @@
 //! Each enabled clock trigger advances the sequence; reset restarts it from the seed.
 //! A seed of 0 means "pick a fresh time-based seed" (at creation and on each reset pulse).
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{ClockState, Trigger, SHIFT_DELAY, TRIGGERS};
 
@@ -143,6 +143,13 @@ impl Random {
 impl Component for Random {
     fn name(&self) -> &str {
         "Random"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 8),
+            OptionSpec::int("seed", "Seed (0 = time-based)", 0, i64::from(u32::MAX), 0),
+            OptionSpec::choice("trigger", "Trigger", &["rising", "falling"], "rising"),
+        ]
     }
     fn options(&self) -> OptionMap {
         OptionMap::new()

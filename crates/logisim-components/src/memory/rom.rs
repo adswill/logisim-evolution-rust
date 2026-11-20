@@ -2,7 +2,7 @@
 //! then address. Reads are combinational. Use [`RomOptions::contents`] or
 //! [`RomOptions::with_data`] to load the program.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PropagateCtx, Value};
 
 use super::contents::MemContents;
 use super::mem::{Layout, LayoutSpec, LineSize, LINES};
@@ -105,6 +105,15 @@ impl Rom {
 impl Component for Rom {
     fn name(&self) -> &str {
         "ROM"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("addr_bits", "Address bits", 2, 24, 8),
+            OptionSpec::int("data_bits", "Data bits", 1, 64, 8),
+            OptionSpec::choice("line", "Words per access", &["single", "dual", "quad", "octo"], "single"),
+            OptionSpec::boolean("allow_misaligned", "Allow misaligned access", false),
+            OptionSpec::string("contents", "Contents (hex words, `value*count` for runs)", ""),
+        ]
     }
     fn options(&self) -> OptionMap {
         let o = &self.opts;

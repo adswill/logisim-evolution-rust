@@ -8,7 +8,7 @@
 //! One deliberate difference from the Java source: when the counter holds an unknown/error value
 //! and the clock does not fire, the Java code outputs all-ones; here the unknown value is kept.
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::register::initial;
 use super::{long_value, parse_u64, ClockState, Startup, Trigger, REGISTER_DELAY, STARTUPS, TRIGGERS};
@@ -125,6 +125,20 @@ impl Counter {
 impl Component for Counter {
     fn name(&self) -> &str {
         "Counter"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 8),
+            OptionSpec::string("max", "Maximum value (decimal)", "255"),
+            OptionSpec::choice(
+                "on_goal",
+                "When the goal is reached",
+                &["wrap", "stay", "continue", "load"],
+                "wrap",
+            ),
+            OptionSpec::choice("trigger", "Trigger", &["rising", "falling"], "rising"),
+            OptionSpec::choice("startup", "Value at power-on", &["zero", "unknown"], "zero"),
+        ]
     }
     fn options(&self) -> OptionMap {
         let o = &self.opts;

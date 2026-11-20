@@ -4,7 +4,7 @@
 //! `3` clear (-10,20) · `4` enable (-30,10). Q and D are `width` bits wide, the rest 1 bit.
 //! Enable is active unless it is exactly 0 (so an unconnected enable still loads).
 
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use super::{ClockState, Startup, Trigger, REGISTER_DELAY, STARTUPS, TRIGGERS};
 
@@ -78,6 +78,13 @@ impl Register {
 impl Component for Register {
     fn name(&self) -> &str {
         "Register"
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 8),
+            OptionSpec::choice("trigger", "Trigger", &["rising", "falling", "high", "low"], "rising"),
+            OptionSpec::choice("startup", "Value at power-on", &["zero", "unknown"], "zero"),
+        ]
     }
     fn options(&self) -> OptionMap {
         OptionMap::new()
