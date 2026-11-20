@@ -1,6 +1,7 @@
 mod app;
 mod examples;
 mod model;
+mod nets;
 mod numfmt;
 mod paint;
 mod sim;

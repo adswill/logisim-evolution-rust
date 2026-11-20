@@ -8,7 +8,7 @@ pub fn half_adder() -> Editor {
     let mut e = Editor::new();
     e.project.metadata.name = "Half adder".into();
     e.project.metadata.description =
-        "Sum = A xor B, Carry = A and B. Use the Poke tool to flip the inputs.".into();
+        "Sum = A xor B, Carry = A and B. Click an input to flip it.".into();
     let part =
         |lib: &str, name: &str, x, y| ComponentDef::new(lib, name, x, y).expect("registry part");
     e.place(

@@ -3,6 +3,7 @@
 
 use crate::examples;
 use crate::model::{Editor, Sel, P};
+use crate::nets::NetAnalysis;
 use crate::numfmt::{self, Base};
 use crate::paint::{self, Gfx, PartView, Theme, ThemeMode, View};
 use crate::sim::{wire_points, Sim};
@@ -130,6 +131,10 @@ pub struct App {
     new_circuit: String,
     status: String,
     show_grid: bool,
+    colour_nets: bool,
+    nets: NetAnalysis,
+    point_net: HashMap<P, usize>,
+    hover_net: Option<usize>,
     title_sent: String,
 }
 
@@ -160,6 +165,10 @@ impl App {
             new_circuit: String::new(),
             status: "Pick a part on the left, then click on the canvas to place it.".into(),
             show_grid: true,
+            colour_nets: true,
+            nets: NetAnalysis::default(),
+            point_net: HashMap::new(),
+            hover_net: None,
             title_sent: String::new(),
         };
         if example {
@@ -174,10 +183,9 @@ impl App {
     fn load_example(&mut self) {
         if self.confirm_discard() {
             self.ed = examples::half_adder();
-            self.tool = Tool::Poke;
+            self.tool = Tool::Select;
             self.status =
-                "Half adder: use the Poke tool to flip inputs A and B and watch Sum and Carry."
-                    .into();
+                "Half adder: click the inputs A and B to flip them and watch Sum and Carry.".into();
         }
     }
 
@@ -293,6 +301,14 @@ impl App {
                 .map(|d| make_info(&self.ed.project, d))
                 .collect();
             self.infos_key = key.clone();
+            self.nets = self.ed.nets().clone();
+            self.point_net = self
+                .nets
+                .nets
+                .iter()
+                .enumerate()
+                .flat_map(|(i, n)| n.points.iter().map(move |p| (*p, i)))
+                .collect();
         }
         if self.sim_on {
             if self.sim_key != key || self.sim.is_none() {
@@ -334,6 +350,11 @@ impl App {
     fn reset_sim(&mut self) {
         self.sim_key = (u64::MAX, String::new());
         self.accum = 0.0;
+    }
+
+    fn is_input_pin(&self, i: usize) -> bool {
+        let d = &self.ed.circuit().components[i];
+        d.library == "Wiring" && d.part == "Pin" && d.options.boolean("output") != Ok(Some(true))
     }
 
     fn poke(&mut self, i: usize) {
@@ -494,6 +515,11 @@ impl App {
 
         self.cursor_world = resp.hover_pos().map(|p| view.to_world(p));
         self.hover = self.cursor_world.map(|(x, y)| (snap(x), snap(y)));
+        self.hover_net = self
+            .cursor_world
+            .filter(|w| self.hit_part(*w).is_none())
+            .and_then(|w| self.hit_wire(w))
+            .and_then(|wi| self.nets.wire_net.get(wi).copied());
         let press = ui
             .input(|i| i.pointer.press_origin())
             .map(|p| view.to_world(p));
@@ -518,6 +544,7 @@ impl App {
             self.tool = Tool::Select;
             self.wire_chain = None;
         }
+        self.draw_net_tooltip(&painter, &th, resp.hover_pos());
         if let Some((x, y)) = self.hover {
             if self.infos.iter().any(|i| i.abs.contains(&(x, y))) {
                 painter.circle_stroke(
@@ -603,7 +630,15 @@ impl App {
                         self.ed.selection.push(h);
                     }
                 }
-                Some(h) => self.ed.selection = vec![h],
+                Some(h) => {
+                    // clicking an input Pin while simulating flips it (no tool switch needed)
+                    if let Sel::Comp(i) = h {
+                        if self.sim_on && self.is_input_pin(i) {
+                            self.poke(i);
+                        }
+                    }
+                    self.ed.selection = vec![h];
+                }
                 None => self.ed.selection.clear(),
             }
         }
@@ -754,30 +789,99 @@ impl App {
         }
     }
 
+    /// Value of the net a wire belongs to (None when the simulation is off).
+    fn wire_value(&self, i: usize) -> Option<Value> {
+        let w = self.ed.circuit().wires[i];
+        self.sim.as_ref().and_then(|s| s.value_at(loc(w.a)))
+    }
+
     fn draw_wires(&self, painter: &egui::Painter, view: View, th: &Theme) {
         let c = self.ed.circuit();
         let (dx, dy) = self.move_offset();
+        let screen = |p: P, o: (i32, i32)| view.to_screen((p.0 + o.0) as f32, (p.1 + o.1) as f32);
+        // halo behind every wire of the hovered net
+        if let Some(n) = self.hover_net.and_then(|n| self.nets.nets.get(n)) {
+            for &wi in &n.wires {
+                let w = c.wires[wi];
+                painter.line_segment(
+                    [screen(w.a, (0, 0)), screen(w.b, (0, 0))],
+                    Stroke::new((9.0 * view.zoom).max(6.0), th.select.gamma_multiply(0.28)),
+                );
+            }
+        }
         for (i, w) in c.wires.iter().enumerate() {
             let selected = self.ed.selection.contains(&Sel::Wire(i));
-            let val = self.sim.as_ref().and_then(|s| s.value_at(loc(w.a)));
-            let color = if selected {
-                th.select
+            let val = self.wire_value(i);
+            let off = if selected { (dx, dy) } else { (0, 0) };
+            let (a, b) = (screen(w.a, off), screen(w.b, off));
+            let hue = self
+                .nets
+                .wire_net
+                .get(i)
+                .and_then(|n| self.nets.nets.get(*n))
+                .map(|n| n.hue);
+            let (color, thick, dashed) = if selected {
+                (th.select, 2.5, false)
+            } else if let (true, Some(h)) = (self.colour_nets, hue) {
+                let base = th.net_color(h, th.dark);
+                match val {
+                    None => (base, 2.5, false),
+                    Some(v) if v.is_error() => (th.v_err, 3.5, false),
+                    Some(v) if v.width().get() > 1 && v.is_unknown() => (th.dim, 4.0, true),
+                    Some(v) if v.width().get() > 1 => (base, 4.5, false),
+                    Some(v) if v == Value::TRUE => (base, 3.4, false),
+                    Some(v) if v == Value::FALSE => (base.gamma_multiply(0.45), 2.0, false),
+                    Some(_) => (th.dim, 2.2, true),
+                }
             } else {
-                th.value_color(val)
+                let thick = if val.is_some_and(|v| v.width().get() > 1) {
+                    3.5
+                } else {
+                    2.0
+                };
+                (th.value_color(val), thick, false)
             };
-            let thick = if val.is_some_and(|v| v.width().get() > 1) {
-                3.5
+            let stroke = Stroke::new((thick * view.zoom).max(1.5), color);
+            if dashed {
+                painter.extend(egui::Shape::dashed_line(
+                    &[a, b],
+                    stroke,
+                    7.0 * view.zoom.max(0.6),
+                    5.0 * view.zoom.max(0.6),
+                ));
             } else {
-                2.0
-            };
-            let (ox, oy) = if selected { (dx, dy) } else { (0, 0) };
-            painter.line_segment(
-                [
-                    view.to_screen((w.a.0 + ox) as f32, (w.a.1 + oy) as f32),
-                    view.to_screen((w.b.0 + ox) as f32, (w.b.1 + oy) as f32),
-                ],
-                Stroke::new((thick * view.zoom).max(1.5), color),
-            );
+                painter.line_segment([a, b], stroke);
+            }
+        }
+        // one label per net: bus width, or a warning for errors (on its longest wire)
+        if self.colour_nets {
+            for n in &self.nets.nets {
+                let Some(&wi) = n.wires.iter().max_by_key(|&&i| {
+                    (c.wires[i].a.0 - c.wires[i].b.0).abs()
+                        + (c.wires[i].a.1 - c.wires[i].b.1).abs()
+                }) else {
+                    continue;
+                };
+                let Some(v) = self.wire_value(wi) else {
+                    continue;
+                };
+                let w = c.wires[wi];
+                let mid = view
+                    .to_screen((w.a.0 + w.b.0) as f32 / 2.0, (w.a.1 + w.b.1) as f32 / 2.0)
+                    + Vec2::new(0.0, -9.0 * view.zoom.max(0.7));
+                let font = egui::FontId::proportional((10.0 * view.zoom).clamp(8.0, 16.0));
+                if v.is_error() {
+                    painter.text(mid, Align2::CENTER_BOTTOM, "! error", font, th.v_err);
+                } else if v.width().get() > 1 {
+                    painter.text(
+                        mid,
+                        Align2::CENTER_BOTTOM,
+                        format!("{} bits", v.width().get()),
+                        font,
+                        th.dim,
+                    );
+                }
+            }
         }
         // junction dots: three or more connections meet (a T counts the through wire twice)
         let mut points: HashMap<P, usize> = HashMap::new();
@@ -804,13 +908,60 @@ impl App {
                 .count();
             if n + 2 * through >= 3 {
                 let val = self.sim.as_ref().and_then(|s| s.value_at(loc(p)));
+                let color = match (
+                    self.colour_nets,
+                    self.point_net.get(&p).and_then(|i| self.nets.nets.get(*i)),
+                ) {
+                    (true, Some(net)) => th.net_color(net.hue, th.dark),
+                    _ => th.value_color(val),
+                };
                 painter.circle_filled(
                     view.to_screen(p.0 as f32, p.1 as f32),
                     (3.5 * view.zoom).max(2.5),
-                    th.value_color(val),
+                    color,
                 );
             }
         }
+    }
+
+    /// Small readout of the hovered net's value in decimal, hex and binary.
+    fn draw_net_tooltip(&self, painter: &egui::Painter, th: &Theme, cursor: Option<Pos2>) {
+        let (Some(n), Some(pos)) = (self.hover_net.and_then(|n| self.nets.nets.get(n)), cursor)
+        else {
+            return;
+        };
+        let mut lines = vec![];
+        match n.wires.first().and_then(|&w| self.wire_value(w)) {
+            None => lines.push("simulation is off".to_string()),
+            Some(v) => {
+                let w = v.width().get() as usize;
+                lines.push(format!("{w}-bit net"));
+                match v.to_u64() {
+                    Some(x) if w == 1 => lines.push(format!("value {x}")),
+                    Some(x) => {
+                        lines.push(format!("dec  {x}"));
+                        lines.push(format!("hex  0x{x:X}"));
+                        lines.push(format!("bin  0b{x:0w$b}"));
+                    }
+                    None => lines.push(format!("bits {}", v.to_binary_string())),
+                }
+            }
+        }
+        let font = egui::FontId::monospace(12.0);
+        let text = lines.join("\n");
+        let galley = painter.layout_no_wrap(text, font, th.text);
+        let rect = Rect::from_min_size(
+            pos + Vec2::new(14.0, 14.0),
+            galley.size() + Vec2::splat(12.0),
+        );
+        painter.rect_filled(rect, 6.0, th.fill);
+        painter.rect_stroke(
+            rect,
+            6.0,
+            Stroke::new(1.0, th.select),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(rect.min + Vec2::splat(6.0), galley, th.text);
     }
 
     fn draw_parts(&self, painter: &egui::Painter, view: View, th: &Theme) {
@@ -846,10 +997,50 @@ impl App {
         }
     }
 
+    fn paste_clip(&mut self) {
+        let skipped = self.ed.paste(self.hover);
+        if skipped > 0 {
+            self.status =
+                format!("{skipped} circuit instance(s) not pasted: they would contain themselves");
+        }
+    }
+
+    fn duplicate(&mut self) {
+        let skipped = self.ed.duplicate();
+        if skipped > 0 {
+            self.status = format!(
+                "{skipped} circuit instance(s) not duplicated: they would contain themselves"
+            );
+        }
+    }
+
     // ---- keyboard ----------------------------------------------------------------------------------
 
     fn keys(&mut self, ctx: &egui::Context) {
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+        let (copy, cut, paste, dup) = ctx.input_mut(|i| {
+            let ev = |f: fn(&egui::Event) -> bool| i.events.iter().any(f);
+            (
+                ev(|e| matches!(e, egui::Event::Copy)),
+                ev(|e| matches!(e, egui::Event::Cut)),
+                ev(|e| matches!(e, egui::Event::Paste(_))),
+                i.consume_key(Modifiers::COMMAND, Key::D),
+            )
+        });
+        if !ctx.egui_wants_keyboard_input() {
+            if copy {
+                self.ed.copy();
+            }
+            if cut {
+                self.ed.cut();
+            }
+            if paste {
+                self.paste_clip();
+            }
+            if dup {
+                self.duplicate();
+            }
+        }
         let (redo, undo, save, open, new, all) = ctx.input_mut(|i| {
             let redo =
                 i.consume_key(cmd_shift, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y);
@@ -952,6 +1143,23 @@ impl App {
                 }
                 ui.separator();
                 let has = !self.ed.selection.is_empty();
+                if ui.add_enabled(has, egui::Button::new("Cut")).clicked() {
+                    self.ed.cut();
+                    ui.close();
+                }
+                if ui.add_enabled(has, egui::Button::new("Copy")).clicked() {
+                    self.ed.copy();
+                    ui.close();
+                }
+                if ui.add_enabled(self.ed.has_clipboard(), egui::Button::new("Paste")).clicked() {
+                    self.paste_clip();
+                    ui.close();
+                }
+                if ui.add_enabled(has, egui::Button::new("Duplicate")).clicked() {
+                    self.duplicate();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.add_enabled(has, egui::Button::new("Delete")).clicked() {
                     self.ed.delete_selection();
                     ui.close();
@@ -968,6 +1176,7 @@ impl App {
                     self.apply_theme(ui.ctx());
                 }
                 ui.checkbox(&mut self.show_grid, "Show grid");
+                ui.checkbox(&mut self.colour_nets, "Colour nets");
                 if ui.button("Reset view").clicked() {
                     self.views.remove(&self.ed.current);
                     ui.close();
@@ -1005,7 +1214,7 @@ impl App {
             let t = self.tool.clone();
             if ui
                 .selectable_label(t == Tool::Select, "Select")
-                .on_hover_text("Click, box-select, drag to move. Esc")
+                .on_hover_text("Click or box-select, drag to move (wires follow). Clicking an input Pin flips it. Esc")
                 .clicked()
             {
                 self.tool = Tool::Select;
