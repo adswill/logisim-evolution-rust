@@ -5,7 +5,12 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, Vec2};
 use logisim_core::{Direction, Port, Value};
 
+pub mod arith;
+pub mod block;
 pub mod gates;
+pub mod memory;
+pub mod plexers;
+pub mod ttl;
 pub mod wiring;
 use logisim_format::ComponentDef;
 
@@ -352,8 +357,14 @@ pub type LibraryPainters = fn(&str) -> Option<&'static dyn PartPainter>;
 
 /// One line per library: `("Library name", module::painter)`. Parts without a painter (or whose
 /// library is not listed) are drawn as a labelled box.
-const LIBRARIES: &[(&str, LibraryPainters)] =
-    &[("Gates", gates::painter), ("Wiring", wiring::painter)];
+const LIBRARIES: &[(&str, LibraryPainters)] = &[
+    ("Gates", gates::painter),
+    ("Wiring", wiring::painter),
+    ("TTL", ttl::painter),
+    ("Plexers", plexers::painter),
+    ("Arithmetic", arith::painter),
+    ("Memory", memory::painter),
+];
 
 pub fn painter_for(library: &str, part: &str) -> &'static dyn PartPainter {
     LIBRARIES
