@@ -2,6 +2,8 @@
 //! 74688, 744075, 747266 (+ the larger parts in the second half of this file).
 
 use super::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 /// 7447 segment table, active-low outputs a..g for digits 0..15 (`1` = segment off).
 const SEG_7447: [[u8; 7]; 16] = [
@@ -345,9 +347,10 @@ pub fn chip_74381() -> Ttl {
 fn combine_levels(selected: Value, idle: Value) -> Value {
     if selected == idle {
         selected
-    } else if selected == Value::ERROR || idle == Value::ERROR {
-        Value::ERROR
-    } else if selected.is_fully_defined() && idle.is_fully_defined() {
+    } else if selected == Value::ERROR
+        || idle == Value::ERROR
+        || (selected.is_fully_defined() && idle.is_fully_defined())
+    {
         Value::ERROR
     } else {
         Value::UNKNOWN
@@ -414,11 +417,68 @@ pub fn chip_74670() -> Ttl {
     })
 }
 
+/// 74123: dual retriggerable monostable multivibrator.
+///
+/// Logisim times the pulse from an Rext/Cext RC model in wall-clock nanoseconds; this engine has
+/// no analog time, so the pulse length is the integer option `pulse_ticks` (simulation clock
+/// ticks, default 2). Pins: 1A = 1, 1B = 2, /1CLR = 3, /1Q = 4, 2Q = 5, 2A = 9, 2B = 10,
+/// /2CLR = 11, /2Q = 12, 1Q = 13. Trigger: B rising with A low, A falling with B high, or
+/// CLR rising with A low and B high. CLR low ends the pulse.
+pub fn chip_74123() -> Ttl {
+    #[derive(Clone, Copy)]
+    struct Half {
+        a: Value,
+        b: Value,
+        clr: Value,
+        remaining: i64,
+    }
+    let spec = Spec::new("74123", 16, &[4, 5, 12, 13]).unused(&[6, 7, 14, 15]);
+    let ticks = Rc::new(Cell::new(2i64));
+    let state = Rc::new(RefCell::new([Half { a: Value::FALSE, b: Value::TRUE, clr: Value::TRUE, remaining: 0 }; 2]));
+    // (A, B, CLR, Q, /Q)
+    const HALVES: [(u8, u8, u8, u8, u8); 2] = [(1, 2, 3, 13, 4), (9, 10, 11, 5, 12)];
+    let publish = |p: &mut Pins, h: usize, remaining: i64| {
+        let (.., q, nq) = HALVES[h];
+        p.set_bool(q, remaining > 0, 4);
+        p.set_bool(nq, remaining <= 0, 4);
+    };
+    let st = state.clone();
+    let tk = ticks.clone();
+    let propagate = move |p: &mut Pins| {
+        let mut s = st.borrow_mut();
+        for (h, &(a, b, clr, ..)) in HALVES.iter().enumerate() {
+            let (na, nb, nc) = (p.get(a), p.get(b), p.get(clr));
+            let old = s[h];
+            let rising_b = old.b == Value::FALSE && nb == Value::TRUE && na == Value::FALSE;
+            let falling_a = old.a == Value::TRUE && na == Value::FALSE && nb == Value::TRUE;
+            let rising_clr = old.clr == Value::FALSE && nc == Value::TRUE && na == Value::FALSE && nb == Value::TRUE;
+            s[h] = Half { a: na, b: nb, clr: nc, remaining: old.remaining };
+            if nc == Value::FALSE {
+                s[h].remaining = 0;
+            } else if rising_b || falling_a || rising_clr {
+                s[h].remaining = tk.get();
+            }
+            publish(p, h, s[h].remaining);
+        }
+    };
+    let st = state;
+    let tick = move |p: &mut Pins| {
+        let mut s = st.borrow_mut();
+        for h in 0..2 {
+            if s[h].remaining > 0 {
+                s[h].remaining -= 1;
+                publish(p, h, s[h].remaining);
+            }
+        }
+    };
+    Ttl::new(spec, propagate).on_tick(tick).with_int_option("pulse_ticks", ticks, 1, 1_000_000)
+}
+
 pub fn parts() -> Vec<PartDesc> {
     chips! {
         "7447" => chip_7447, "7485" => chip_7485, "74257" => chip_74257,
         "74266" => chip_74266, "74283" => chip_74283, "74688" => chip_74688,
-        "744075" => chip_744075, "747266" => chip_747266, "7487" => chip_7487,
+        "744075" => chip_744075, "747266" => chip_747266, "7487" => chip_7487, "74123" => chip_74123,
         "74181" => chip_74181, "74182" => chip_74182, "74259" => chip_74259,
         "74381" => chip_74381, "74670" => chip_74670,
     }
@@ -580,7 +640,7 @@ mod tests {
         r.put(4, false); // /P0 active
         assert!(r.hi(12)); // Cn+x = P0 & Cn
         r.put(3, false); // /G0 active
-        assert!(r.hi(12) && r.hi(11) == false);
+        assert!(r.hi(12) && !r.hi(11));
         let mut r = Rig::new(chip_7487());
         r.put(8, false);
         r.put(1, true);
@@ -626,5 +686,26 @@ mod tests {
         }
         r.put(11, true);
         assert_eq!(r.get(10), Value::UNKNOWN);
+    }
+
+    #[test]
+    fn monostable_74123() {
+        let mut r = Rig::new(chip_74123());
+        r.put(3, true); // CLR high
+        r.put(2, false);
+        r.put(1, false);
+        assert!(!r.hi(13) && r.hi(4));
+        r.put(2, true); // B rising with A low triggers
+        assert!(r.hi(13) && !r.hi(4));
+        r.c.tick();
+        assert!(r.hi(13)); // 1 tick left of 2
+        r.c.tick();
+        assert!(!r.hi(13) && r.hi(4));
+        r.put(2, true);
+        r.put(1, true);
+        r.put(1, false); // A falling with B high triggers
+        assert!(r.hi(13));
+        r.put(3, false); // clear ends pulse
+        assert!(!r.hi(13));
     }
 }

@@ -13,6 +13,8 @@
 //! Chips with open-collector outputs drive `0` or X (floating), never `1`.
 
 use crate::registry::{Library, PartDesc};
+use std::cell::Cell;
+use std::rc::Rc;
 use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 pub mod buffers;
@@ -211,6 +213,14 @@ impl Edge {
 
 type Logic = Box<dyn FnMut(&mut Pins)>;
 
+/// An extra integer option (e.g. a monostable's pulse length) shared with the chip's logic.
+struct IntOption {
+    key: &'static str,
+    cell: Rc<Cell<i64>>,
+    lo: i64,
+    hi: i64,
+}
+
 /// A TTL chip: package description + logic closure (which owns any state).
 pub struct Ttl {
     spec: Spec,
@@ -219,6 +229,8 @@ pub struct Ttl {
     map: Vec<Option<usize>>,
     ports: Vec<Port>,
     logic: Logic,
+    tick: Option<Logic>,
+    int_option: Option<IntOption>,
 }
 
 impl Ttl {
@@ -237,6 +249,8 @@ impl Ttl {
             map: vec![],
             ports: vec![],
             logic: Box::new(logic),
+            tick: None,
+            int_option: None,
         };
         t.layout();
         t
@@ -287,6 +301,18 @@ impl Ttl {
         self.ports = ports;
     }
 
+    /// Run `f` on every simulation clock tick (for time-based parts such as monostables).
+    pub fn on_tick(mut self, f: impl FnMut(&mut Pins) + 'static) -> Ttl {
+        self.tick = Some(Box::new(f));
+        self
+    }
+
+    /// Expose one integer option `key` (range `lo..=hi`) backed by `cell`.
+    pub fn with_int_option(mut self, key: &'static str, cell: Rc<Cell<i64>>, lo: i64, hi: i64) -> Ttl {
+        self.int_option = Some(IntOption { key, cell, lo, hi });
+        self
+    }
+
     pub fn spec(&self) -> &Spec {
         &self.spec
     }
@@ -307,12 +333,23 @@ impl Component for Ttl {
         self.ports.clone()
     }
     fn options(&self) -> OptionMap {
-        OptionMap::new().with("vcc_gnd_ports", self.opts.vcc_gnd_ports)
+        let mut m = OptionMap::new().with("vcc_gnd_ports", self.opts.vcc_gnd_ports);
+        if let Some(o) = &self.int_option {
+            m.set(o.key, o.cell.get());
+        }
+        m
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
-        m.reject_unknown(&["vcc_gnd_ports"])?;
+        let mut known = vec!["vcc_gnd_ports"];
+        known.extend(self.int_option.as_ref().map(|o| o.key));
+        m.reject_unknown(&known)?;
         if let Some(b) = m.boolean("vcc_gnd_ports")? {
             self.opts.vcc_gnd_ports = b;
+        }
+        if let Some(o) = &self.int_option {
+            if let Some(v) = m.int(o.key, o.lo, o.hi)? {
+                o.cell.set(v);
+            }
         }
         self.layout();
         Ok(())
@@ -333,6 +370,15 @@ impl Component for Ttl {
             return;
         }
         (self.logic)(&mut pins);
+    }
+    fn tick(&mut self, ctx: &mut dyn PropagateCtx) {
+        if let Some(f) = self.tick.as_mut() {
+            let mut pins = Pins {
+                ctx,
+                map: &self.map,
+            };
+            f(&mut pins);
+        }
     }
 }
 
@@ -459,7 +505,7 @@ mod tests {
     #[test]
     fn every_part_round_trips_its_options() {
         let lib = library();
-        assert!(lib.parts.len() > 80);
+        assert_eq!(lib.parts.len(), 85);
         for p in &lib.parts {
             let part = (p.make)();
             assert_eq!(part.name(), p.name);

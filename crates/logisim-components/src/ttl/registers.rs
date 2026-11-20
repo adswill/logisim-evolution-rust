@@ -255,12 +255,90 @@ pub fn chip_74299() -> Ttl {
     })
 }
 
+fn shift_in(sh: &mut [Value; 8], serial: Value) {
+    for stage in (1..8).rev() {
+        sh[stage] = sh[stage - 1];
+    }
+    sh[0] = serial;
+}
+
+/// 74594 / 74595: 8-bit shift register with separate 8-bit storage register.
+/// Pins: QB..QH = 1..7, QA = 15, QH' = 9, /SRCLR = 10, SRCLK = 11, RCLK = 12, SER = 14, and
+/// pin 13 = /OE (74595, tri-state outputs) or /RCLR (74594, clears the storage register).
+fn shift_storage(name: &'static str, has_oe: bool) -> Ttl {
+    const OUT: [u8; 8] = [15, 1, 2, 3, 4, 5, 6, 7]; // QA..QH
+    let spec = Spec::new(name, 16, &[1, 2, 3, 4, 5, 6, 7, 9, 15]);
+    let mut shift = [Value::FALSE; 8];
+    let mut store = [Value::FALSE; 8];
+    let (mut shift_clk, mut store_clk) = (Edge::new(), Edge::new());
+    Ttl::new(spec, move |p| {
+        let shift_edge = shift_clk.rising(p.get(11));
+        let store_edge = store_clk.rising(p.get(12));
+        let cleared = p.lo(10);
+        let before = shift;
+        if cleared {
+            shift = [Value::FALSE; 8];
+        } else if shift_edge {
+            shift_in(&mut shift, p.get(14));
+        }
+        if !has_oe && p.lo(13) {
+            store = [Value::FALSE; 8];
+        } else if store_edge {
+            // a simultaneous shift edge stores the pre-shift contents
+            store = if shift_edge && !cleared { before } else { shift };
+        }
+        let enabled = !has_oe || p.lo(13);
+        for (i, &pin) in OUT.iter().enumerate() {
+            p.set(pin, if enabled { store[i] } else { Value::UNKNOWN }, 1);
+        }
+        p.set(9, shift[7], 1);
+    })
+}
+pub fn chip_74594() -> Ttl {
+    shift_storage("74594", false)
+}
+pub fn chip_74595() -> Ttl {
+    shift_storage("74595", true)
+}
+
+/// 744094: 8-stage shift-and-store register. STR = 1, D = 2, CP = 3, OE = 15 (active high),
+/// QP0..QP3 = 4..7, QP4..QP7 = 14,13,12,11, QS1 = 9 (follows last stage on CP rise),
+/// QS2 = 10 (last stage captured on CP fall). Storage follows the shift register while STR is high.
+pub fn chip_744094() -> Ttl {
+    const QP: [u8; 8] = [4, 5, 6, 7, 14, 13, 12, 11];
+    let spec = Spec::new("744094", 16, &[4, 5, 6, 7, 9, 10, 11, 12, 13, 14]);
+    let mut shift = [Value::FALSE; 8];
+    let mut store = [Value::FALSE; 8];
+    let mut qs2 = Value::FALSE;
+    let mut rise = Edge::new();
+    let mut fall = Edge::new();
+    Ttl::new(spec, move |p| {
+        let cp = p.get(3);
+        if rise.rising(cp) {
+            shift_in(&mut shift, p.get(2));
+        }
+        if fall.falling(cp) {
+            qs2 = shift[7];
+        }
+        if p.hi(1) {
+            store = shift;
+        }
+        let enabled = p.hi(15);
+        for (i, &pin) in QP.iter().enumerate() {
+            p.set(pin, if enabled { store[i] } else { Value::UNKNOWN }, 1);
+        }
+        p.set(9, shift[7], 1);
+        p.set(10, qs2, 1);
+    })
+}
+
 pub fn parts() -> Vec<PartDesc> {
     chips! {
         "74173" => chip_74173, "74175" => chip_74175, "74273" => chip_74273,
         "74374" => chip_74374, "74377" => chip_74377, "74164" => chip_74164,
         "74165" => chip_74165, "74166" => chip_74166, "74194" => chip_74194,
-        "74299" => chip_74299,
+        "74299" => chip_74299, "74594" => chip_74594, "74595" => chip_74595,
+        "744094" => chip_744094,
     }
 }
 
@@ -422,5 +500,50 @@ mod tests {
         r.pulse(12);
         assert!(!r.hi(8));
         assert!(r.hi(13)); // B output now 1 (enabled)
+    }
+
+    #[test]
+    fn shift_and_store() {
+        const OUT: [u8; 8] = [15, 1, 2, 3, 4, 5, 6, 7];
+        let mut r = Rig::new(chip_74595());
+        r.put(10, true);
+        r.put(13, false);
+        // shift in 1,0,1,1,0,0,1,0 (first bit ends in QH)
+        let bits = [true, false, true, true, false, false, true, false];
+        for &b in &bits {
+            r.put(14, b);
+            r.pulse(11);
+        }
+        assert_eq!(r.read_n(&OUT), Some(0)); // not stored yet
+        r.pulse(12);
+        // QA = last bit shifted in (index 0), QH = first
+        let expect: u64 = bits.iter().rev().enumerate().map(|(i, &b)| (b as u64) << i).sum();
+        assert_eq!(r.read_n(&OUT), Some(expect));
+        r.put(13, true);
+        assert_eq!(r.get(15), Value::UNKNOWN);
+        r.put(13, false);
+        r.put(10, false);
+        r.pulse(12);
+        assert_eq!(r.read_n(&OUT), Some(0));
+
+        let mut r = Rig::new(chip_74594());
+        r.put(10, true);
+        r.put(13, true);
+        r.put(14, true);
+        r.pulse(11);
+        r.pulse(12);
+        assert!(r.hi(15));
+        r.put(13, false); // storage clear
+        assert!(!r.hi(15));
+
+        let mut r = Rig::new(chip_744094());
+        r.put(15, true);
+        r.put(2, true);
+        r.pulse(3);
+        assert!(!r.hi(4)); // not strobed
+        r.put(1, true);
+        assert!(r.hi(4));
+        r.put(15, false);
+        assert_eq!(r.get(4), Value::UNKNOWN);
     }
 }

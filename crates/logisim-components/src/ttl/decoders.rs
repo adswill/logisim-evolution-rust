@@ -243,13 +243,13 @@ mod tests {
     fn multiplexers() {
         const D: [u8; 8] = [4, 3, 2, 1, 15, 14, 13, 12];
         let mut r = Rig::new(chip_74151());
-        for s in 0..8usize {
+        for (s, &sel_pin) in D.iter().enumerate() {
             r.put_n(&[11, 10, 9], s as u64);
             for (k, &d) in D.iter().enumerate() {
                 r.put(d, k == s);
             }
             assert!(r.hi(5) && !r.hi(6));
-            r.put(D[s], false);
+            r.put(sel_pin, false);
             assert!(!r.hi(5) && r.hi(6));
         }
         r.put(7, true);

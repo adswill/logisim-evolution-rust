@@ -4,7 +4,7 @@ use super::*;
 use logisim_core::{BitWidth, Value};
 
 fn contains_error(v: Value) -> bool {
-    v.bits().iter().any(|b| *b == Value::ERROR)
+    v.bits().contains(&Value::ERROR)
 }
 
 /// Increment a `w`-bit word modulo `2^w`; E/X propagate to the whole word.
@@ -163,7 +163,7 @@ fn accepts(sources: &[Value], mask: u32) -> bool {
 }
 
 fn any_error(sources: &[Value]) -> bool {
-    sources.iter().any(|s| *s == Value::ERROR)
+    sources.contains(&Value::ERROR)
 }
 
 /// 74190: synchronous BCD up/down decade counter with asynchronous parallel load.
@@ -346,18 +346,13 @@ fn advance_div5(bits: &mut [Value]) {
         bits[1..4].fill(Value::UNKNOWN);
         return;
     }
-    let jk = |q: Value, j: bool| if j { toggle_or_set(q) } else { q };
     // Q1: J = !Q3, K = 1  → toggle when J, else reset
     let next_q1 = if q3 == Value::FALSE { toggle(q1) } else { Value::FALSE };
     let next_q3 = if q1 == Value::TRUE && q2 == Value::TRUE { toggle(q3) } else { Value::FALSE };
     let next_q2 = if q1 == Value::TRUE { toggle(q2) } else { q2 };
-    let _ = jk;
     bits[1] = next_q1;
     bits[2] = next_q2;
     bits[3] = next_q3;
-}
-fn toggle_or_set(q: Value) -> Value {
-    toggle(q)
 }
 
 /// 74393: dual 4-bit binary ripple counter, falling edge, MR active high.
