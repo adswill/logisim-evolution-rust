@@ -83,7 +83,7 @@ pub fn inside_text(g: &Gfx, at: (f32, f32), inward: (f32, f32), s: &str, size: f
         _ => Align2::RIGHT_BOTTOM,
     };
     g.text(
-        (at.0 + inward.0 * 3.0, at.1 + inward.1 * 3.0),
+        (at.0 + inward.0 * 5.5, at.1 + inward.1 * 5.5),
         anchor,
         s,
         size,
@@ -146,4 +146,15 @@ pub fn control_label(g: &Gfx, v: &PartView, i: usize, body: Rect4, s: &str) {
         -1.0
     };
     inside_text(g, (p.0, p.1 + out * 5.0), (0.0, out), s, 7.0, g.theme.dim);
+}
+
+/// Like [`port_label`], but ports on the top/bottom edge get their label *outside* the body, where
+/// it cannot collide with the side labels of small parts.
+pub fn edge_label(g: &Gfx, v: &PartView, i: usize, body: Rect4, s: &str) {
+    match port_at(v, i) {
+        Some(p) if (p.1 - body.1).abs() < 1.0 || (p.1 - body.3).abs() < 1.0 => {
+            control_label(g, v, i, body, s)
+        }
+        _ => port_label(g, v, i, body, s),
+    }
 }

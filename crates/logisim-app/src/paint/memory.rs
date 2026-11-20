@@ -2,7 +2,7 @@
 //! register, random generator, RAM and ROM. Every control port gets a short label, and clock
 //! inputs get the usual triangle.
 
-use super::block::{clock_mark, port_at, port_label, rect_poly, Rect4};
+use super::block::{clock_mark, edge_label as port_label, port_at, rect_poly, Rect4};
 use super::{port_bounds, union, Gfx, PartPainter, PartView};
 use eframe::egui::Align2;
 
@@ -40,7 +40,7 @@ pub fn painter(part: &str) -> Option<&'static dyn PartPainter> {
                 (4, "ld"),
                 (5, "↕"),
                 (6, "en"),
-                (7, "co"),
+                (7, "ct"),
             ],
         },
         "Random" => &Boxed {
