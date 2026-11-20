@@ -8,7 +8,7 @@
 //!   Segments are active high and X for invalid input (digits > 9).
 
 use crate::registry::{Library, PartDesc};
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 /// Registry names are the Logisim ids and the saved part names; never rename them.
 pub fn library() -> Library {
@@ -82,6 +82,9 @@ impl Component for BinToBcd {
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("bin_bits", self.bits as i64)
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![OptionSpec::int("bin_bits", "Binary input bits", 4, 13, 9)]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["bin_bits"])?;
@@ -239,5 +242,12 @@ mod tests {
         assert_eq!(b.ports().len(), 5);
         assert!(b.set_options(&OptionMap::new().with("bin_bits", 3)).is_err());
         assert!(b.set_options(&OptionMap::new().with("nope", 1)).is_err());
+    }
+
+    #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{e}"));
+        }
     }
 }
