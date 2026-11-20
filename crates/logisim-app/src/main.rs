@@ -2,6 +2,7 @@ mod actions;
 mod app;
 mod canvas;
 mod catalog;
+mod dock;
 mod examples;
 mod fit;
 mod fuzzy;

@@ -369,9 +369,14 @@ impl App {
                             }
                         });
                 }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.strong("Circuits");
+            });
+    }
+
+    /// The list of circuits of the project, with place / main / delete and "new circuit".
+    pub(crate) fn circuits_panel(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
                 let names: Vec<String> = self
                     .ed
                     .project
@@ -380,7 +385,7 @@ impl App {
                     .map(|c| c.name.clone())
                     .collect();
                 for name in names {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let main = if name == self.ed.project.main {
                             " (main)"
                         } else {
@@ -433,8 +438,43 @@ impl App {
             });
     }
 
+    /// Tab strip of the project's circuits above the canvas.
+    pub(crate) fn circuit_tabs(&mut self, ui: &mut egui::Ui) {
+        let names: Vec<String> = self
+            .ed
+            .project
+            .circuits
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        egui::ScrollArea::horizontal()
+            .id_salt("circuit_tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for name in &names {
+                        let active = *name == self.ed.current;
+                        let label = if *name == self.ed.project.main {
+                            format!("{name}  (main)")
+                        } else {
+                            name.clone()
+                        };
+                        let r = ui.selectable_label(active, label);
+                        r.widget_info(|| {
+                            egui::WidgetInfo::selected(egui::Role::Tab, true, active, name.clone())
+                        });
+                        if r.clicked() {
+                            self.ed.open_circuit(name);
+                        }
+                    }
+                    if ui.button("+").on_hover_text("New circuit").clicked() {
+                        let n = self.ed.add_circuit("circuit");
+                        self.ed.open_circuit(&n);
+                    }
+                });
+            });
+    }
+
     pub(crate) fn attributes(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Attributes");
         ui.horizontal(|ui| {
             ui.label("Number format:");
             for (n, b) in Base::ALL.into_iter().enumerate() {

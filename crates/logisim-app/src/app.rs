@@ -134,6 +134,8 @@ pub struct App {
     pub(crate) show_shortcuts: bool,
     pub(crate) search: String,
     pub(crate) focus_search: bool,
+    pub(crate) dock: egui_dock::DockState<crate::dock::PanelKind>,
+    pub(crate) frame: u64,
     pub(crate) fit_requested: bool,
     /// Dev/screenshot flag `--theme`: forces a theme without touching the saved preferences.
     pub(crate) theme_override: Option<crate::prefs::ThemeChoice>,
@@ -184,6 +186,11 @@ impl App {
             show_shortcuts: false,
             search: String::new(),
             focus_search: false,
+            dock: prefs
+                .layout
+                .as_deref()
+                .map_or_else(crate::dock::default_layout, crate::dock::from_text),
+            frame: 0,
             fit_requested: false,
             theme_override: None,
             canvas_id: egui::Id::NULL,
@@ -780,15 +787,7 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::Panel::left("toolbox")
-            .default_size(230.0)
-            .size_range(180.0..=380.0)
-            .show(ui, |ui| self.toolbox(ui));
-        egui::Panel::right("attributes")
-            .default_size(260.0)
-            .size_range(200.0..=420.0)
-            .show(ui, |ui| self.attributes(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
+        egui::CentralPanel::default().show(ui, |ui| self.dock_ui(ui));
         self.palette_ui(&ctx);
         self.shortcuts_ui(&ctx);
     }
