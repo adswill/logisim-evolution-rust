@@ -38,7 +38,8 @@ pub struct WindowEnv<'a> {
     pub editor: &'a mut Editor,
     /// Live simulation of the open circuit (`None` when simulation is off or failed to build).
     pub sim: Option<&'a mut Sim>,
-    /// Message shown in the status bar.
+    /// Message shown in the status bar (for windows to report results).
+    #[allow(dead_code)]
     pub status: &'a mut String,
     /// For `request_repaint*` and other egui context calls.
     pub ctx: &'a egui::Context,
@@ -100,6 +101,7 @@ impl Windows {
             self.open.insert(id);
         }
     }
+    #[allow(dead_code)]
     pub fn open(&mut self, id: &str) {
         if let Some(w) = self.list.iter().find(|w| w.id() == id) {
             self.open.insert(w.id());

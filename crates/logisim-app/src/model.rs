@@ -182,6 +182,7 @@ impl Editor {
     }
 
     /// Run a command on the open circuit and record it for undo (generic label).
+    #[allow(dead_code)]
     pub fn exec(&mut self, cmd: Command) {
         self.exec_as("Edit", cmd);
     }
@@ -218,6 +219,7 @@ impl Editor {
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
+    #[allow(dead_code)]
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
