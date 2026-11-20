@@ -1,6 +1,7 @@
 //! The component abstraction: ports plus a `propagate` function.
 
 use crate::geom::Location;
+use crate::option::OptionMap;
 use crate::value::{BitWidth, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,15 @@ pub trait Component {
     /// Pull resistors: `TRUE`/`FALSE`/`ERROR` pulls floating bits of the net at port 0.
     fn pull_value(&self) -> Option<Value> {
         None
+    }
+    /// Current options, for saving. Parts without options keep the empty default.
+    fn options(&self) -> OptionMap {
+        OptionMap::new()
+    }
+    /// Apply saved options (called on a freshly made default part, *before* `ports()`).
+    /// Absent keys keep the part's default; unknown keys or bad values return `Err`.
+    fn set_options(&mut self, opts: &OptionMap) -> Result<(), String> {
+        opts.reject_unknown(&[])
     }
     /// Called whenever an input net changes (and once at reset).
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx);

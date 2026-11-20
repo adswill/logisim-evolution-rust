@@ -1,6 +1,10 @@
 //! Grid geometry: locations and facing directions.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 pub struct Location {
     pub x: i32,
     pub y: i32,
@@ -19,7 +23,7 @@ impl Location {
 }
 
 /// Which way a component faces. East is the unrotated orientation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum Direction {
     #[default]
     East,

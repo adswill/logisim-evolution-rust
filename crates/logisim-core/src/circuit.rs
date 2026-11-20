@@ -429,6 +429,15 @@ impl Circuit {
         self.settle();
     }
 
+    /// Re-evaluate several components, then settle once.
+    pub fn refresh_many(&mut self, ids: &[CompId]) {
+        self.ensure_nets();
+        for &id in ids {
+            self.run_component(id, false);
+        }
+        self.settle();
+    }
+
     /// Tick all clocked components once and settle.
     pub fn tick(&mut self) {
         self.ensure_nets();
