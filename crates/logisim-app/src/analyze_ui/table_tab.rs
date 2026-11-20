@@ -96,7 +96,7 @@ pub fn show(ui: &mut egui::Ui, st: &mut Analyzer, pal: &Pal) {
                                 );
                             }
                             ui.add_space(12.0);
-                            for o in 0..n_out {
+                            for (o, out_name) in out_names.iter().enumerate() {
                                 let e = st.model.table().get(row, o);
                                 let (rect, resp) = ui.allocate_exact_size(
                                     Vec2::new(CELL_W - 2.0, ROW_H - 2.0),
@@ -105,7 +105,7 @@ pub fn show(ui: &mut egui::Ui, st: &mut Analyzer, pal: &Pal) {
                                 let resp = describe(resp, || {
                                     format!(
                                         "Row {row}, output {}: {}. Activate to change.",
-                                        out_names[o],
+                                        out_name,
                                         e.to_char()
                                     )
                                 });

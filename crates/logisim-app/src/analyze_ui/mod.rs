@@ -292,6 +292,8 @@ mod tests {
                 editor: &mut *editor,
                 sim: None,
                 status: &mut status,
+                ctx,
+                frame: 0,
             };
             egui::Window::new("t")
                 .default_size([1000.0, 640.0])
@@ -392,6 +394,8 @@ mod tests {
             editor: &mut ed,
             sim: None,
             status: &mut status,
+            ctx: &egui::Context::default(),
+            frame: 0,
         };
         w.create_circuit(&mut env);
         assert_eq!(ed.project.circuits.len(), before + 1);
@@ -402,6 +406,8 @@ mod tests {
             editor: &mut ed,
             sim: None,
             status: &mut status,
+            ctx: &egui::Context::default(),
+            frame: 0,
         };
         w.create_circuit(&mut env);
         assert_eq!(ed.project.circuits.len(), before + 2);
@@ -421,6 +427,8 @@ mod tests {
             editor: &mut ed,
             sim: None,
             status: &mut status,
+            ctx: &egui::Context::default(),
+            frame: 0,
         };
         w.create_circuit(&mut env);
         assert_eq!(ed.project.circuits.len(), before);

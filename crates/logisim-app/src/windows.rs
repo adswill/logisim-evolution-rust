@@ -40,6 +40,10 @@ pub struct WindowEnv<'a> {
     pub sim: Option<&'a mut Sim>,
     /// Message shown in the status bar.
     pub status: &'a mut String,
+    /// For `request_repaint*` and other egui context calls.
+    pub ctx: &'a egui::Context,
+    /// Frame counter (same value for every window within one frame).
+    pub frame: u64,
 }
 
 pub trait AppWindow {
@@ -70,6 +74,7 @@ pub fn registered_windows() -> Vec<Box<dyn AppWindow>> {
     let mut reg: Vec<Box<dyn AppWindow>> = vec![];
     reg.push(Box::new(ProjectInfoWindow));
     reg.push(Box::new(crate::analyze_ui::AnalysisWindow::default()));
+    crate::log_ui::register(&mut reg);
     reg
 }
 

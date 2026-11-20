@@ -17,6 +17,8 @@ pub fn painter(part: &str) -> Option<&'static dyn PartPainter> {
         "Transistor" => &SwitchPainter { gates: 1 },
         "Transmission Gate" => &SwitchPainter { gates: 2 },
         "Bit Extender" => &ExtenderPainter,
+        "Do Not Connect" => &DncPainter,
+        "Power On Reset" => &PorPainter,
         _ => return None,
     })
 }
@@ -359,5 +361,41 @@ impl PartPainter for ExtenderPainter {
     }
     fn bounds(&self, v: &PartView) -> (f32, f32, f32, f32) {
         union((-42.0, -14.0, 2.0, 14.0), port_bounds(v, 4.0))
+    }
+}
+
+struct DncPainter;
+impl PartPainter for DncPainter {
+    fn paint(&self, g: &Gfx, v: &PartView) {
+        let c = g.theme.v_err;
+        let _ = v;
+        g.line((-5.0, -5.0), (5.0, 5.0), c);
+        g.line((-5.0, 5.0), (5.0, -5.0), c);
+    }
+    fn bounds(&self, _: &PartView) -> (f32, f32, f32, f32) {
+        (-7.0, -7.0, 7.0, 7.0)
+    }
+}
+
+struct PorPainter;
+impl PartPainter for PorPainter {
+    fn paint(&self, g: &Gfx, v: &PartView) {
+        let th = g.theme;
+        g.rect((-30.0, -10.0), (0.0, 10.0), Some(th.fill), th.stroke);
+        let arrow = if v.string("transition") == "low_to_high" {
+            "↑"
+        } else {
+            "↓"
+        };
+        g.text(
+            (-15.0, 0.0),
+            Align2::CENTER_CENTER,
+            &format!("POR {arrow}"),
+            9.0,
+            th.text,
+        );
+    }
+    fn bounds(&self, _: &PartView) -> (f32, f32, f32, f32) {
+        (-30.0, -10.0, 0.0, 10.0)
     }
 }

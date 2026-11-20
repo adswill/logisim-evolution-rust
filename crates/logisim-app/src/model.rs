@@ -249,7 +249,54 @@ impl Editor {
 
     // ---- high-level edits -----------------------------------------------------------
 
-    pub fn place(&mut self, def: ComponentDef) {
+    /// Labels already used by Pins of the open circuit.
+    fn pin_labels(&self) -> Vec<String> {
+        self.circuit()
+            .components
+            .iter()
+            .filter(|d| is_pin(d))
+            .filter_map(|d| d.options.string("label").ok().flatten())
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    /// First unused pin label (A, B, C… for inputs, Out1, Out2… for outputs), skipping `taken`.
+    pub fn next_pin_label(&self, output: bool, taken: &[String]) -> String {
+        let used = self.pin_labels();
+        let is_used = |l: &str| used.iter().chain(taken).any(|u| u == l);
+        (0usize..)
+            .map(|n| {
+                if output {
+                    format!("Out{}", n + 1)
+                } else if n < 26 {
+                    ((b'A' + n as u8) as char).to_string()
+                } else {
+                    format!("{}{}", (b'A' + (n % 26) as u8) as char, n / 26 + 1)
+                }
+            })
+            .find(|l| !is_used(l))
+            .expect("infinite iterator")
+    }
+
+    pub fn place(&mut self, mut def: ComponentDef) {
+        if is_pin(&def)
+            && def
+                .options
+                .string("label")
+                .ok()
+                .flatten()
+                .is_none_or(|l| l.trim().is_empty())
+        {
+            let output = def
+                .options
+                .boolean("output")
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+            let label = self.next_pin_label(output, &[]);
+            def.options.set("label", label);
+        }
         let idx = self.circuit().components.len();
         let label = format!("Place {}", def.part);
         self.exec_as(&label, Command::InsertComponent { idx, def });
@@ -495,6 +542,7 @@ impl Editor {
         let mut cmds = vec![];
         let (mut nc, mut nw) = (self.circuit().components.len(), self.circuit().wires.len());
         let first_comp = nc;
+        let mut new_labels: Vec<String> = vec![];
         for def in &clip.components {
             if def.library == SUBCIRCUIT_LIBRARY && self.subcircuit_def(&def.part, def.at).is_err()
             {
@@ -503,6 +551,29 @@ impl Editor {
             }
             let mut d = def.clone();
             d.at = (d.at.0 + dx, d.at.1 + dy);
+            if is_pin(&d) {
+                let label = d
+                    .options
+                    .string("label")
+                    .ok()
+                    .flatten()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let taken = self
+                    .pin_labels()
+                    .iter()
+                    .chain(&new_labels)
+                    .any(|u| *u == label);
+                if !label.is_empty() && taken {
+                    let output = d.options.boolean("output").ok().flatten().unwrap_or(false);
+                    let fresh = self.next_pin_label(output, &new_labels);
+                    d.options.set("label", fresh.clone());
+                    new_labels.push(fresh);
+                } else if !label.is_empty() {
+                    new_labels.push(label);
+                }
+            }
             cmds.push(Command::InsertComponent { idx: nc, def: d });
             nc += 1;
         }
@@ -688,6 +759,10 @@ impl Default for Editor {
     }
 }
 
+fn is_pin(d: &ComponentDef) -> bool {
+    d.library == "Wiring" && d.part == "Pin"
+}
+
 pub fn rotate_ccw(d: Direction) -> Direction {
     match d {
         Direction::East => Direction::North,
@@ -835,7 +910,8 @@ mod tests {
         e.place(pin(0, 0).option("label", "a"));
         e.place(pin(0, 40).option("label", "b"));
         e.place(pin(300, 0).option("label", "q").option("output", true));
-        e.place(pin(0, 90)); // no label → not in the interface
+        e.place(pin(0, 90)); // auto-labelled
+        e.set_option(3, "label", "").unwrap(); // cleared label → not in the interface
         let i = &e.circuit().interface;
         assert_eq!(
             i.iter()
@@ -845,9 +921,9 @@ mod tests {
         );
         assert_eq!(i[1].offset, (0, 20));
         assert_eq!(i[2].offset, (60, 0));
-        e.undo();
-        e.undo();
-        e.undo();
+        for _ in 0..4 {
+            e.undo(); // label edit, auto-labelled pin, q, b
+        }
         assert_eq!(e.circuit().interface.len(), 1); // only "a" is left
     }
 
@@ -1038,5 +1114,62 @@ mod tests {
         e.selection = vec![Sel::Comp(0)];
         e.duplicate();
         assert_eq!(e.undo_labels()[0], "Duplicate");
+    }
+
+    fn pin(x: i32, y: i32) -> ComponentDef {
+        ComponentDef::new("Wiring", "Pin", x, y).unwrap()
+    }
+    fn labels(e: &Editor) -> Vec<String> {
+        e.circuit()
+            .components
+            .iter()
+            .filter_map(|d| d.options.string("label").ok().flatten().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn new_pins_get_unique_labels_inputs_then_outputs() {
+        let mut e = Editor::new();
+        for i in 0..3 {
+            e.place(pin(0, 40 * i));
+        }
+        e.place(pin(300, 0).option("output", true));
+        e.place(pin(300, 40).option("output", true));
+        assert_eq!(labels(&e), ["A", "B", "C", "Out1", "Out2"]);
+        // a deleted label is reused, an explicit label is kept
+        e.selection = vec![Sel::Comp(1)];
+        e.delete_selection();
+        e.place(pin(0, 200));
+        e.place(pin(0, 240).option("label", "clk"));
+        assert_eq!(labels(&e), ["A", "C", "Out1", "Out2", "B", "clk"]);
+        // and the interface now contains every labelled pin
+        assert_eq!(e.circuit().interface.len(), 6);
+    }
+
+    #[test]
+    fn labels_run_past_z_and_stay_unique() {
+        let mut e = Editor::new();
+        for i in 0..30 {
+            e.place(pin(0, 40 * i));
+        }
+        let l = labels(&e);
+        assert_eq!(l[25], "Z");
+        assert_eq!(l[26], "A2");
+        let set: std::collections::HashSet<_> = l.iter().collect();
+        assert_eq!(set.len(), 30);
+    }
+
+    #[test]
+    fn pasted_pins_are_relabelled_when_they_collide() {
+        let mut e = Editor::new();
+        e.place(pin(0, 0));
+        e.place(pin(0, 40));
+        e.selection = vec![Sel::Comp(0), Sel::Comp(1)];
+        e.copy();
+        e.paste(None);
+        assert_eq!(labels(&e), ["A", "B", "C", "D"]);
+        e.selection = vec![Sel::Comp(0)];
+        e.duplicate();
+        assert_eq!(labels(&e).last().unwrap(), "E");
     }
 }

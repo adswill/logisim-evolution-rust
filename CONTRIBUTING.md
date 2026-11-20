@@ -135,6 +135,8 @@ pub struct WindowEnv<'a> {
     pub editor: &'a mut Editor,        // project data, open circuit, selection, undoable edit methods
     pub sim: Option<&'a mut Sim>,      // live simulation of the open circuit (None when off)
     pub status: &'a mut String,        // status-bar message
+    pub ctx: &'a egui::Context,        // e.g. ctx.request_repaint_after(..)
+    pub frame: u64,                    // frame counter, equal for all windows within a frame
 }
 // registration, in windows.rs:
 //     reg.push(Box::new(my_module::MyWindow::default()));
