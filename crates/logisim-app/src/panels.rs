@@ -5,90 +5,96 @@
 
 use crate::model::Sel;
 use crate::numfmt::{self, Base};
-use eframe::egui::{self};
+use eframe::egui::{self, Align2, Key};
 use logisim_components::all_libraries;
 use logisim_core::{Direction, OptVal, OptionKind, OptionSpec};
 use logisim_format::{ComponentDef, SUBCIRCUIT_LIBRARY};
 
+use crate::actions::Action;
 use crate::app::*;
+use crate::catalog::CatalogPart;
 
 impl App {
     // ---- panels --------------------------------------------------------------------------------------
 
+    /// One menu entry bound to an action (label, shortcut text, enabled state).
+    fn menu_item(&mut self, ui: &mut egui::Ui, a: Action, enabled: bool) {
+        let mut b = egui::Button::new(a.label());
+        if let Some(sc) = a.shortcut() {
+            b = b.shortcut_text(sc);
+        }
+        if ui.add_enabled(enabled, b).clicked() {
+            self.run_action(a, ui.ctx());
+            ui.close();
+        }
+    }
+
+    fn menu_check(&mut self, ui: &mut egui::Ui, a: Action, on: bool) {
+        let mut v = on;
+        if ui.checkbox(&mut v, a.label()).changed() {
+            self.run_action(a, ui.ctx());
+        }
+    }
+
     pub(crate) fn menu(&mut self, ui: &mut egui::Ui) {
+        let has_sel = !self.ed.selection.is_empty();
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("New").clicked() {
-                    self.new_project();
-                    ui.close();
-                }
-                if ui.button("Open…").clicked() {
-                    self.open_dialog();
-                    ui.close();
-                }
-                if ui.button("Save").clicked() {
-                    self.save(false);
-                    ui.close();
-                }
-                if ui.button("Save As…").clicked() {
-                    self.save(true);
-                    ui.close();
-                }
+                self.menu_item(ui, Action::New, true);
+                self.menu_item(ui, Action::Open, true);
+                ui.menu_button("Open recent", |ui| {
+                    let recent = self.prefs.recent_files.clone();
+                    if recent.is_empty() {
+                        ui.weak("No recent files yet");
+                    }
+                    for f in recent {
+                        let name = std::path::Path::new(&f).file_name().map_or(f.clone(), |n| n.to_string_lossy().into());
+                        if ui.button(name).on_hover_text(&f).clicked() {
+                            if self.confirm_discard() {
+                                self.open_path(std::path::PathBuf::from(&f));
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+                self.menu_item(ui, Action::Save, true);
+                self.menu_item(ui, Action::SaveAs, true);
                 ui.separator();
-                if ui.button("Open example: Half adder").clicked() {
-                    self.load_example();
-                    ui.close();
-                }
+                self.menu_item(ui, Action::OpenExample, true);
                 ui.separator();
-                if ui.button("Quit").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
+                self.menu_item(ui, Action::Quit, true);
             });
             ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(self.ed.can_undo(), egui::Button::new("Undo")).clicked() {
-                    self.ed.undo();
-                    ui.close();
-                }
-                if ui.add_enabled(self.ed.can_redo(), egui::Button::new("Redo")).clicked() {
-                    self.ed.redo();
-                    ui.close();
-                }
+                let (u, r) = (self.ed.can_undo(), self.ed.can_redo());
+                self.menu_item(ui, Action::Undo, u);
+                self.menu_item(ui, Action::Redo, r);
                 ui.separator();
-                let has = !self.ed.selection.is_empty();
-                if ui.add_enabled(has, egui::Button::new("Cut")).clicked() {
-                    self.ed.cut();
-                    ui.close();
-                }
-                if ui.add_enabled(has, egui::Button::new("Copy")).clicked() {
-                    self.ed.copy();
-                    ui.close();
-                }
-                if ui.add_enabled(self.ed.has_clipboard(), egui::Button::new("Paste")).clicked() {
-                    self.paste_clip();
-                    ui.close();
-                }
-                if ui.add_enabled(has, egui::Button::new("Duplicate")).clicked() {
-                    self.duplicate();
-                    ui.close();
-                }
+                self.menu_item(ui, Action::Cut, has_sel);
+                self.menu_item(ui, Action::Copy, has_sel);
+                let clip = self.ed.has_clipboard();
+                self.menu_item(ui, Action::Paste, clip);
+                self.menu_item(ui, Action::Duplicate, has_sel);
                 ui.separator();
-                if ui.add_enabled(has, egui::Button::new("Delete")).clicked() {
-                    self.ed.delete_selection();
-                    ui.close();
-                }
-                if ui.add_enabled(has, egui::Button::new("Rotate (R)")).clicked() {
-                    self.ed.rotate_selection();
-                    ui.close();
-                }
+                self.menu_item(ui, Action::Delete, has_sel);
+                self.menu_item(ui, Action::Rotate, has_sel);
+                self.menu_item(ui, Action::SelectAll, true);
             });
             ui.menu_button("View", |ui| {
+                self.menu_item(ui, Action::FitView, true);
+                self.menu_item(ui, Action::ResetView, true);
+                ui.separator();
+                let (g, c, m) = (self.show_grid, self.colour_nets, self.prefs.show_minimap);
+                self.menu_check(ui, Action::ToggleGrid, g);
+                self.menu_check(ui, Action::ToggleColourNets, c);
+                self.menu_check(ui, Action::ToggleMinimap, m);
+                ui.separator();
                 ui.menu_button("Theme", |ui| {
                     for t in crate::prefs::ThemeChoice::ALL {
                         ui.radio_value(&mut self.prefs.theme, t, t.label());
                     }
                 });
                 ui.menu_button("Text and zoom", |ui| {
-                    ui.label(format!("Interface zoom {:.0}%  (Cmd +/-)", self.prefs.ui_scale * 100.0));
+                    ui.label(format!("Interface zoom {:.0}%  ({}+ / {}−)", self.prefs.ui_scale * 100.0, mod_key(), mod_key()));
                     let mut s = self.prefs.ui_scale;
                     if ui.add(egui::Slider::new(&mut s, 0.7..=2.0).show_value(false)).changed() {
                         self.set_ui_scale(s);
@@ -100,33 +106,21 @@ impl App {
                         self.prefs.font_scale = 1.0;
                     }
                 });
-                ui.checkbox(&mut self.show_grid, "Show grid");
-                ui.checkbox(&mut self.colour_nets, "Colour nets");
-                if ui.button("Reset view").clicked() {
-                    self.views.remove(&self.ed.current);
-                    ui.close();
-                }
+                self.menu_item(ui, Action::ResetLayout, true);
             });
             ui.menu_button("Simulate", |ui| {
-                ui.checkbox(&mut self.sim_on, "Simulation enabled");
-                let label = if self.running { "Pause clock" } else { "Run clock" };
-                if ui.button(label).clicked() {
-                    self.running = !self.running;
-                    ui.close();
-                }
-                if ui.button("Step one tick").clicked() {
-                    if let Some(s) = self.sim.as_mut() {
-                        s.tick();
-                    }
-                    ui.close();
-                }
-                if ui.button("Reset simulation").clicked() {
-                    self.reset_sim();
-                    ui.close();
-                }
+                let on = self.sim_on;
+                self.menu_check(ui, Action::SimToggle, on);
+                let running = self.running;
+                self.menu_check(ui, Action::RunToggle, running);
+                self.menu_item(ui, Action::Step, true);
+                self.menu_item(ui, Action::ResetSim, true);
             });
             ui.menu_button("Help", |ui| {
-                if ui.button("About").clicked() {
+                self.menu_item(ui, Action::CommandPalette, true);
+                self.menu_item(ui, Action::Shortcuts, true);
+                ui.separator();
+                if ui.button("About rcirc").clicked() {
                     self.status = "rcirc: a beginner-friendly Rust port of Logisim Evolution (GPL-3.0-or-later).".into();
                     ui.close();
                 }
@@ -203,91 +197,252 @@ impl App {
         });
     }
 
-    pub(crate) fn toolbox(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Parts");
-            for lib in all_libraries() {
-                egui::CollapsingHeader::new(lib.name)
-                    .default_open(lib.name == "Gates" || lib.name == "Wiring")
-                    .show(ui, |ui| {
-                        for p in &lib.parts {
-                            let selected = self.tool == Tool::Place(lib.name.into(), p.name.into());
-                            if ui.selectable_label(selected, p.name).clicked() {
-                                self.tool = Tool::Place(lib.name.into(), p.name.into());
-                            }
-                        }
-                    });
+    /// One part in the toolbox: name (click to place, drag onto the canvas), favourite star.
+    fn part_row(&mut self, ui: &mut egui::Ui, p: &CatalogPart) {
+        let id = p.id();
+        let fav = self.prefs.favourites.contains(&id);
+        let selected = self.tool == Tool::Place(p.library.clone(), p.name.clone());
+        ui.horizontal(|ui| {
+            let star_w = crate::style::MIN_TARGET;
+            let w = (ui.available_width() - star_w - ui.spacing().item_spacing.x - 1.0).max(60.0);
+            let (rect, resp) = ui.allocate_exact_size(
+                egui::vec2(w, crate::style::MIN_TARGET),
+                egui::Sense::click_and_drag(),
+            );
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    true,
+                    format!("{} ({})", p.name, p.library),
+                )
+            });
+            if ui.is_rect_visible(rect) {
+                let vis = ui.visuals();
+                let bg = if selected {
+                    vis.selection.bg_fill
+                } else if resp.hovered() || resp.has_focus() {
+                    vis.widgets.hovered.bg_fill
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                ui.painter().rect_filled(rect, 6.0, bg);
+                if resp.has_focus() {
+                    ui.painter().rect_stroke(
+                        rect,
+                        6.0,
+                        vis.selection.stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let text = vis.text_color();
+                ui.painter().text(
+                    rect.left_center() + egui::vec2(10.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    &p.name,
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    text,
+                );
             }
-            ui.separator();
-            ui.heading("Circuits");
-            let names: Vec<String> = self
-                .ed
-                .project
-                .circuits
-                .iter()
-                .map(|c| c.name.clone())
-                .collect();
-            for name in names {
-                ui.horizontal(|ui| {
-                    let main = if name == self.ed.project.main {
-                        " (main)"
-                    } else {
-                        ""
-                    };
-                    if ui
-                        .selectable_label(name == self.ed.current, format!("{name}{main}"))
-                        .clicked()
-                    {
-                        self.ed.open_circuit(&name);
-                    }
-                    if name != self.ed.current
-                        && ui
-                            .small_button("Place")
-                            .on_hover_text("Place this circuit as a part in the open circuit")
-                            .clicked()
-                    {
-                        self.tool = Tool::Place(SUBCIRCUIT_LIBRARY.into(), name.clone());
-                    }
-                    if ui
-                        .small_button("Main")
-                        .on_hover_text("Make this the main circuit")
-                        .clicked()
-                    {
-                        self.ed.set_main(&name);
-                    }
-                    if ui
-                        .small_button("Del")
-                        .on_hover_text("Delete this circuit")
-                        .clicked()
-                    {
-                        if let Err(e) = self.ed.delete_circuit(&name) {
-                            self.status = e;
-                        }
-                    }
+            if resp.drag_started() {
+                resp.dnd_set_drag_payload(PartPayload {
+                    library: p.library.clone(),
+                    part: p.name.clone(),
                 });
             }
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_circuit)
-                        .hint_text("new circuit name")
-                        .desired_width(110.0),
-                );
-                if ui.button("Add").clicked() {
-                    let n = self.ed.add_circuit(&self.new_circuit.clone());
-                    self.ed.open_circuit(&n);
-                    self.new_circuit.clear();
-                }
+            let resp = resp.on_hover_text(self.part_tooltip(&p.library, &p.name));
+            if resp.clicked() {
+                self.start_place(&p.library, &p.name);
+            }
+            let star = if fav { "★" } else { "☆" };
+            let hint = if fav {
+                "Remove from favourites"
+            } else {
+                "Add to favourites"
+            };
+            let sr = ui.add_sized(
+                [star_w, crate::style::MIN_TARGET],
+                egui::Button::new(star).frame(false),
+            );
+            sr.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::CheckBox,
+                    true,
+                    fav,
+                    format!("Favourite {}", p.name),
+                )
             });
+            if sr.on_hover_text(hint).clicked() {
+                self.prefs.toggle_favourite(&id);
+            }
         });
     }
 
-    /// Option widgets for the selected part.
+    pub(crate) fn toolbox(&mut self, ui: &mut egui::Ui) {
+        let search_id = egui::Id::unique("part_search");
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .id(search_id)
+                .hint_text("Search parts…  (Ctrl/⌘ F)")
+                .desired_width(ui.available_width()),
+        );
+        if self.focus_search {
+            r.request_focus();
+            self.focus_search = false;
+        }
+        if r.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+            self.search.clear();
+        }
+        let query = self.search.trim().to_string();
+        let parts = self.catalog.clone();
+        let find = |id: &str| parts.iter().find(|p| p.id() == id).cloned();
+        let matches: Vec<CatalogPart> = if query.is_empty() {
+            vec![]
+        } else {
+            let mut scored: Vec<(i32, usize)> = parts
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    crate::fuzzy::score(&query, &p.name)
+                        .or_else(|| {
+                            crate::fuzzy::score(&query, &format!("{} {}", p.library, p.description))
+                                .map(|s| s / 4 - 30)
+                        })
+                        .map(|s| (s, i))
+                })
+                .collect();
+            scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            scored.into_iter().map(|(_, i)| parts[i].clone()).collect()
+        };
+        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+            if let Some(first) = matches.first() {
+                self.start_place(&first.library, &first.name);
+            }
+        }
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                if !query.is_empty() {
+                    if matches.is_empty() {
+                        ui.weak(
+                            "No part matches. Try the command palette for actions and circuits.",
+                        );
+                    }
+                    for p in &matches {
+                        self.part_row(ui, p);
+                    }
+                    return;
+                }
+                let favs: Vec<CatalogPart> = self
+                    .prefs
+                    .favourites
+                    .iter()
+                    .filter_map(|i| find(i))
+                    .collect();
+                if !favs.is_empty() {
+                    ui.strong("Favourites");
+                    for p in &favs {
+                        self.part_row(ui, p);
+                    }
+                    ui.add_space(6.0);
+                }
+                let recents: Vec<CatalogPart> = self
+                    .prefs
+                    .recent_parts
+                    .iter()
+                    .filter_map(|i| find(i))
+                    .take(5)
+                    .collect();
+                if !recents.is_empty() {
+                    ui.strong("Recent");
+                    for p in &recents {
+                        self.part_row(ui, p);
+                    }
+                    ui.add_space(6.0);
+                }
+                for lib in all_libraries() {
+                    egui::CollapsingHeader::new(egui::RichText::new(lib.name).strong())
+                        .default_open(lib.name == "Gates" || lib.name == "Wiring")
+                        .show(ui, |ui| {
+                            for p in parts.iter().filter(|p| p.library == lib.name) {
+                                self.part_row(ui, p);
+                            }
+                        });
+                }
+                ui.add_space(8.0);
+                ui.separator();
+                ui.strong("Circuits");
+                let names: Vec<String> = self
+                    .ed
+                    .project
+                    .circuits
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+                for name in names {
+                    ui.horizontal(|ui| {
+                        let main = if name == self.ed.project.main {
+                            " (main)"
+                        } else {
+                            ""
+                        };
+                        if ui
+                            .selectable_label(name == self.ed.current, format!("{name}{main}"))
+                            .clicked()
+                        {
+                            self.ed.open_circuit(&name);
+                        }
+                        if name != self.ed.current
+                            && ui
+                                .small_button("Place")
+                                .on_hover_text("Place this circuit as a part in the open circuit")
+                                .clicked()
+                        {
+                            self.start_place(SUBCIRCUIT_LIBRARY, &name);
+                        }
+                        if ui
+                            .small_button("Main")
+                            .on_hover_text("Make this the main circuit")
+                            .clicked()
+                        {
+                            self.ed.set_main(&name);
+                        }
+                        if ui
+                            .small_button("Del")
+                            .on_hover_text("Delete this circuit")
+                            .clicked()
+                        {
+                            if let Err(e) = self.ed.delete_circuit(&name) {
+                                self.status = e;
+                            }
+                        }
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_circuit)
+                            .hint_text("new circuit name")
+                            .desired_width(120.0),
+                    );
+                    if ui.button("Add").clicked() {
+                        let n = self.ed.add_circuit(&self.new_circuit.clone());
+                        self.ed.open_circuit(&n);
+                        self.new_circuit.clear();
+                    }
+                });
+            });
+    }
+
     pub(crate) fn attributes(&mut self, ui: &mut egui::Ui) {
         ui.heading("Attributes");
         ui.horizontal(|ui| {
             ui.label("Number format:");
-            for b in Base::ALL {
-                if ui.selectable_label(self.base == b, b.label()).clicked() {
+            for (n, b) in Base::ALL.into_iter().enumerate() {
+                let r = ui.selectable_label(self.base == b, b.label());
+                if n == 0 {
+                    self.attr_id = r.id;
+                }
+                if r.clicked() {
                     self.base = b;
                     self.attr_buf.clear();
                 }
@@ -503,5 +658,14 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title_sent = title;
         }
+    }
+}
+
+/// "Cmd" on macOS, "Ctrl" elsewhere.
+pub(crate) fn mod_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl"
     }
 }

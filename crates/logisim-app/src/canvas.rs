@@ -18,11 +18,31 @@ impl App {
     pub(crate) fn canvas(&mut self, ui: &mut egui::Ui) {
         let th = Theme::new(self.mode);
         let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+        self.canvas_id = resp.id;
         let rect = resp.rect;
         let painter = painter.with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, th.bg);
 
-        let mut view = self.view();
+        let mut view = match self.views.get(&self.ed.current) {
+            Some(v) => *v,
+            None => {
+                self.fit_requested = true; // first time this circuit is shown: fit it
+                View {
+                    origin: rect.min.to_vec2() + Vec2::new(60.0, 60.0),
+                    zoom: 1.0,
+                }
+            }
+        };
+        if self.fit_requested {
+            self.fit_requested = false;
+            view = match self.content_bounds() {
+                Some(b) => crate::fit::fit_view(b, rect, 56.0, 1.5),
+                None => View {
+                    origin: rect.min.to_vec2() + Vec2::new(60.0, 60.0),
+                    zoom: 1.0,
+                },
+            };
+        }
         if resp.dragged_by(PointerButton::Secondary) || resp.dragged_by(PointerButton::Middle) {
             view.origin += resp.drag_delta();
         }
@@ -70,6 +90,7 @@ impl App {
             Tool::Wire => self.wire_tool(&resp, &painter, view, &th, press),
             Tool::Place(lib, part) => self.place_tool(&resp, &painter, view, &th, &lib, &part),
         }
+        self.drag_drop_part(&resp, &painter, view, &th);
         if resp.clicked_by(PointerButton::Secondary) {
             self.tool = Tool::Select;
             self.wire_chain = None;
@@ -273,8 +294,78 @@ impl App {
         };
         paint::paint_part(&g, &v);
         if resp.clicked_by(PointerButton::Primary) {
-            self.ed.place(def);
+            self.place_def(def);
         }
+    }
+
+    /// Place a part and keep the tool so several can be dropped in a row.
+    pub(crate) fn place_def(&mut self, def: ComponentDef) {
+        self.ed.place(def);
+        self.status = "Placed. Click again to place another, right-click or Esc to stop.".into();
+    }
+
+    /// While a part is dragged from the toolbox: ghost preview, and place it on release.
+    pub(crate) fn drag_drop_part(
+        &mut self,
+        resp: &egui::Response,
+        painter: &egui::Painter,
+        view: View,
+        th: &Theme,
+    ) {
+        let Some((x, y)) = self.hover else { return };
+        let hovering = resp.dnd_hover_payload::<PartPayload>();
+        let dropped = resp.dnd_release_payload::<PartPayload>();
+        let Some(pl) = dropped.clone().or(hovering) else {
+            return;
+        };
+        let made = if pl.library == SUBCIRCUIT_LIBRARY {
+            self.ed.subcircuit_def(&pl.part, (x, y))
+        } else {
+            ComponentDef::new(&pl.library, &pl.part, x, y).map_err(|e| e.to_string())
+        };
+        let Ok(mut def) = made else { return };
+        def.facing = self.place_facing;
+        if dropped.is_some() {
+            self.start_place(&pl.library, &pl.part);
+            self.tool = Tool::Select;
+            self.place_def(def);
+            return;
+        }
+        let info = make_info(&self.ed.project, &def);
+        let vals: Vec<Option<Value>> = vec![];
+        let v = PartView {
+            def: &def,
+            name: &info.name,
+            ports: &info.ports,
+            port_vals: &vals,
+            selected: false,
+            port_names: &info.port_names,
+        };
+        let g = Gfx {
+            painter,
+            view,
+            theme: th,
+            at: def.at,
+            facing: def.facing,
+            alpha: 0.55,
+        };
+        paint::paint_part(&g, &v);
+    }
+
+    /// World-space box around every part and wire of the open circuit.
+    pub(crate) fn content_bounds(&self) -> Option<Rect> {
+        let mut r = Rect::NOTHING;
+        for i in 0..self.infos.len() {
+            let v = self.part_view(i, false, &[]);
+            let b = paint::world_bounds(v.def, &v);
+            r.extend_with(b.min);
+            r.extend_with(b.max);
+        }
+        for w in &self.ed.circuit().wires {
+            r.extend_with(Pos2::new(w.a.0 as f32, w.a.1 as f32));
+            r.extend_with(Pos2::new(w.b.0 as f32, w.b.1 as f32));
+        }
+        r.is_finite().then_some(r)
     }
 
     pub(crate) fn draw_grid(&self, painter: &egui::Painter, rect: Rect, view: View, th: &Theme) {

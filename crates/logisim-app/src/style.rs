@@ -6,6 +6,7 @@ use crate::prefs::ThemeChoice;
 use eframe::egui::{self, Color32, CornerRadius, FontId, Stroke, TextStyle, Vec2};
 
 /// Spacing scale (logical px): 4 / 8 / 12 / 16.
+#[allow(dead_code)]
 pub const SP1: f32 = 4.0;
 pub const SP2: f32 = 8.0;
 pub const SP3: f32 = 12.0;

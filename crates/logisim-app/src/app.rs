@@ -1,12 +1,15 @@
 //! The egui application: panels, canvas interaction, simulation control and file handling.
 //! Document logic lives in `model`; this file turns input into model calls and draws.
 
+use crate::actions::Action;
+use crate::catalog::{self, CatalogPart};
 use crate::examples;
 use crate::model::{Editor, Sel, P};
 use crate::nets::NetAnalysis;
 use crate::numfmt::Base;
+use crate::overlays::PaletteState;
 use crate::paint::{self, PartView, ThemeMode, View};
-use crate::prefs::Prefs;
+use crate::prefs::{Prefs, MAX_RECENT_FILES, MAX_RECENT_PARTS};
 use crate::sim::{wire_points, Sim};
 use crate::style;
 use eframe::egui::{self, Key, Modifiers, Pos2, Rect, Vec2};
@@ -14,6 +17,21 @@ use logisim_core::{Direction, Location, Port, PortKind, Value};
 use logisim_format::{ComponentDef, ProjectFile, SUBCIRCUIT_LIBRARY};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Developer / screenshot switches from the command line.
+#[derive(Default)]
+pub struct DevFlags {
+    pub theme: Option<crate::prefs::ThemeChoice>,
+    pub palette: bool,
+    pub shortcuts: bool,
+}
+
+/// Drag-and-drop payload when dragging a part from the toolbox.
+#[derive(Clone)]
+pub(crate) struct PartPayload {
+    pub library: String,
+    pub part: String,
+}
 
 pub(crate) const GRID: i32 = 10;
 
@@ -111,6 +129,17 @@ pub struct App {
     pub(crate) ed: Editor,
     pub(crate) mode: ThemeMode,
     pub(crate) prefs: Prefs,
+    pub(crate) catalog: Vec<CatalogPart>,
+    pub(crate) palette: Option<PaletteState>,
+    pub(crate) show_shortcuts: bool,
+    pub(crate) search: String,
+    pub(crate) focus_search: bool,
+    pub(crate) fit_requested: bool,
+    /// Dev/screenshot flag `--theme`: forces a theme without touching the saved preferences.
+    pub(crate) theme_override: Option<crate::prefs::ThemeChoice>,
+    pub(crate) canvas_id: egui::Id,
+    pub(crate) attr_id: egui::Id,
+    pub(crate) reset_layout: bool,
     pub(crate) prefs_saved: Prefs,
     pub(crate) style_key: Option<(ThemeMode, u32, u32)>,
     pub(crate) views: HashMap<String, View>,
@@ -143,13 +172,23 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(ctx: &egui::Context, file: Option<PathBuf>, example: bool) -> Self {
+    pub fn new(ctx: &egui::Context, file: Option<PathBuf>, example: bool, dev: &DevFlags) -> Self {
         let prefs = Prefs::load();
         let mode = style::resolve(prefs.theme, ctx);
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut app = App {
             ed: Editor::new(),
             mode,
+            catalog: catalog::all_parts(),
+            palette: None,
+            show_shortcuts: false,
+            search: String::new(),
+            focus_search: false,
+            fit_requested: false,
+            theme_override: None,
+            canvas_id: egui::Id::NULL,
+            attr_id: egui::Id::NULL,
+            reset_layout: false,
             prefs_saved: prefs.clone(),
             style_key: None,
             show_grid: prefs.show_grid,
@@ -186,6 +225,11 @@ impl App {
         } else if let Some(p) = file {
             app.open_path(p);
         }
+        app.theme_override = dev.theme;
+        if dev.palette {
+            app.open_palette();
+        }
+        app.show_shortcuts = dev.shortcuts;
         app.refresh_style(ctx);
         app
     }
@@ -201,7 +245,7 @@ impl App {
 
     /// Re-apply the visual style when the theme or scale preferences changed.
     pub(crate) fn refresh_style(&mut self, ctx: &egui::Context) {
-        self.mode = style::resolve(self.prefs.theme, ctx);
+        self.mode = style::resolve(self.theme_override.unwrap_or(self.prefs.theme), ctx);
         let key = (
             self.mode,
             (self.prefs.ui_scale * 100.0) as u32,
@@ -281,6 +325,7 @@ impl App {
             }
             Ok(project) => {
                 self.status = format!("Opened {}", p.display());
+                self.remember_file(&p);
                 self.ed = Editor::from_project(project, Some(p));
             }
             Err(e) => self.status = format!("Could not open {}: {e}", p.display()),
@@ -308,6 +353,7 @@ impl App {
         match written {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());
+                self.remember_file(&path);
                 self.ed.path = Some(path);
                 self.ed.mark_saved();
             }
@@ -529,95 +575,148 @@ impl App {
 
     // ---- keyboard ----------------------------------------------------------------------------------
 
+    /// Start placing a part (remembered in the recent list).
+    pub(crate) fn start_place(&mut self, library: &str, part: &str) {
+        if library != SUBCIRCUIT_LIBRARY {
+            Prefs::push_recent(
+                &mut self.prefs.recent_parts,
+                &format!("{library}/{part}"),
+                MAX_RECENT_PARTS,
+            );
+        }
+        self.tool = Tool::Place(library.into(), part.into());
+        self.place_facing = Direction::East;
+    }
+
+    pub(crate) fn remember_file(&mut self, path: &std::path::Path) {
+        Prefs::push_recent(
+            &mut self.prefs.recent_files,
+            &path.to_string_lossy(),
+            MAX_RECENT_FILES,
+        );
+    }
+
+    /// Single entry point for every command (menus, shortcuts, palette).
+    pub(crate) fn run_action(&mut self, a: Action, ctx: &egui::Context) {
+        use crate::prefs::ThemeChoice;
+        match a {
+            Action::New => self.new_project(),
+            Action::Open => self.open_dialog(),
+            Action::Save => self.save(false),
+            Action::SaveAs => self.save(true),
+            Action::OpenExample => self.load_example(),
+            Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::Undo => self.ed.undo(),
+            Action::Redo => self.ed.redo(),
+            Action::Cut => self.ed.cut(),
+            Action::Copy => self.ed.copy(),
+            Action::Paste => self.paste_clip(),
+            Action::Duplicate => self.duplicate(),
+            Action::Delete => self.ed.delete_selection(),
+            Action::Rotate => {
+                if matches!(self.tool, Tool::Place(..)) {
+                    self.place_facing = crate::model::rotate_ccw(self.place_facing);
+                } else {
+                    self.ed.rotate_selection();
+                }
+            }
+            Action::SelectAll => {
+                let (n, m) = (
+                    self.ed.circuit().components.len(),
+                    self.ed.circuit().wires.len(),
+                );
+                self.ed.selection = (0..n).map(Sel::Comp).chain((0..m).map(Sel::Wire)).collect();
+            }
+            Action::ToolSelect => self.tool = Tool::Select,
+            Action::ToolPoke => self.tool = Tool::Poke,
+            Action::ToolWire => {
+                self.tool = Tool::Wire;
+                self.wire_chain = None;
+            }
+            Action::SimToggle => self.sim_on = !self.sim_on,
+            Action::RunToggle => self.running = !self.running,
+            Action::Step => {
+                if let Some(s) = self.sim.as_mut() {
+                    s.tick();
+                }
+            }
+            Action::ResetSim => self.reset_sim(),
+            Action::ToggleGrid => self.show_grid = !self.show_grid,
+            Action::ToggleColourNets => self.colour_nets = !self.colour_nets,
+            Action::ToggleMinimap => self.prefs.show_minimap = !self.prefs.show_minimap,
+            Action::FitView => self.fit_requested = true,
+            Action::ResetView => {
+                self.views.remove(&self.ed.current);
+            }
+            Action::ZoomIn => self.set_ui_scale(self.prefs.ui_scale + 0.1),
+            Action::ZoomOut => self.set_ui_scale(self.prefs.ui_scale - 0.1),
+            Action::ThemeSystem => self.prefs.theme = ThemeChoice::System,
+            Action::ThemeLight => self.prefs.theme = ThemeChoice::Light,
+            Action::ThemeDark => self.prefs.theme = ThemeChoice::Dark,
+            Action::ThemeHighContrast => self.prefs.theme = ThemeChoice::HighContrast,
+            Action::ResetLayout => self.reset_layout = true,
+            Action::FocusSearch => self.focus_search = true,
+            Action::CommandPalette => self.open_palette(),
+            Action::Shortcuts => self.show_shortcuts = !self.show_shortcuts,
+        }
+    }
+
     pub(crate) fn keys(&mut self, ctx: &egui::Context) {
-        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
-        let (copy, cut, paste, dup) = ctx.input_mut(|i| {
-            let ev = |f: fn(&egui::Event) -> bool| i.events.iter().any(f);
+        // clipboard events (the OS turns Cmd+C/X/V into these)
+        let (copy, cut, paste) = ctx.input(|i| {
+            let has = |f: fn(&egui::Event) -> bool| i.events.iter().any(f);
             (
-                ev(|e| matches!(e, egui::Event::Copy)),
-                ev(|e| matches!(e, egui::Event::Cut)),
-                ev(|e| matches!(e, egui::Event::Paste(_))),
-                i.consume_key(Modifiers::COMMAND, Key::D),
+                has(|e| matches!(e, egui::Event::Copy)),
+                has(|e| matches!(e, egui::Event::Cut)),
+                has(|e| matches!(e, egui::Event::Paste(_))),
             )
         });
-        if !ctx.egui_wants_keyboard_input() {
+        let typing = ctx.egui_wants_keyboard_input();
+        if self.palette.is_some() {
+            return; // the palette owns the keyboard while open
+        }
+        if !typing {
             if copy {
-                self.ed.copy();
+                self.run_action(Action::Copy, ctx);
             }
             if cut {
-                self.ed.cut();
+                self.run_action(Action::Cut, ctx);
             }
             if paste {
-                self.paste_clip();
-            }
-            if dup {
-                self.duplicate();
+                self.run_action(Action::Paste, ctx);
             }
         }
-        let (redo, undo, save, open, new, all) = ctx.input_mut(|i| {
-            let redo =
-                i.consume_key(cmd_shift, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y);
-            (
-                redo,
-                !redo && i.consume_key(Modifiers::COMMAND, Key::Z),
-                i.consume_key(Modifiers::COMMAND, Key::S),
-                i.consume_key(Modifiers::COMMAND, Key::O),
-                i.consume_key(Modifiers::COMMAND, Key::N),
-                i.consume_key(Modifiers::COMMAND, Key::A),
-            )
-        });
-        let (zin, zout) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::COMMAND, Key::Equals)
-                    || i.consume_key(Modifiers::COMMAND, Key::Plus),
-                i.consume_key(Modifiers::COMMAND, Key::Minus),
-            )
-        });
-        if zin {
-            self.set_ui_scale(self.prefs.ui_scale + 0.1);
+        // table-driven shortcuts
+        for &a in Action::ALL {
+            let Some((m, k)) = a.binding() else { continue };
+            if typing && a.needs_canvas_focus() {
+                continue;
+            }
+            let hit = ctx.input_mut(|i| {
+                i.consume_key(m, k) || (a == Action::ZoomIn && i.consume_key(m, Key::Plus))
+            });
+            if hit {
+                self.run_action(a, ctx);
+                break;
+            }
         }
-        if zout {
-            self.set_ui_scale(self.prefs.ui_scale - 0.1);
-        }
-        if redo {
-            self.ed.redo();
-        }
-        if undo {
-            self.ed.undo();
-        }
-        if save {
-            self.save(false);
-        }
-        if open {
-            self.open_dialog();
-        }
-        if new {
-            self.new_project();
-        }
-        if all {
-            let n = self.ed.circuit().components.len();
-            let m = self.ed.circuit().wires.len();
-            self.ed.selection = (0..n).map(Sel::Comp).chain((0..m).map(Sel::Wire)).collect();
-        }
-        if ctx.egui_wants_keyboard_input() {
+        if typing {
             return;
         }
-        let (del, rot, esc) = ctx.input(|i| {
+        let (del, rot, esc, f6, shift) = ctx.input(|i| {
             (
                 i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                i.key_pressed(Key::R),
+                i.key_pressed(Key::R) && !i.modifiers.command,
                 i.key_pressed(Key::Escape),
+                i.key_pressed(Key::F6),
+                i.modifiers.shift,
             )
         });
         if del {
-            self.ed.delete_selection();
+            self.run_action(Action::Delete, ctx);
         }
         if rot {
-            if matches!(self.tool, Tool::Place(..)) {
-                self.place_facing = crate::model::rotate_ccw(self.place_facing);
-            } else {
-                self.ed.rotate_selection();
-            }
+            self.run_action(Action::Rotate, ctx);
         }
         if esc {
             self.tool = Tool::Select;
@@ -625,6 +724,43 @@ impl App {
             self.drag = Drag::None;
             self.ed.selection.clear();
         }
+        if f6 {
+            self.cycle_focus(ctx, shift);
+        }
+        // arrow keys nudge the selection (one grid step, Shift = ten)
+        let step = if shift { 10 * GRID } else { GRID };
+        for (key, dx, dy) in [
+            (Key::ArrowLeft, -step, 0),
+            (Key::ArrowRight, step, 0),
+            (Key::ArrowUp, 0, -step),
+            (Key::ArrowDown, 0, step),
+        ] {
+            if ctx.input_mut(|i| {
+                i.consume_key(Modifiers::NONE, key) || i.consume_key(Modifiers::SHIFT, key)
+            }) && !self.ed.selection.is_empty()
+            {
+                self.ed.move_selection(dx, dy);
+            }
+        }
+    }
+
+    /// F6 moves focus between the main areas: part search -> canvas -> attributes.
+    pub(crate) fn cycle_focus(&mut self, ctx: &egui::Context, backwards: bool) {
+        let order = [
+            egui::Id::unique("part_search"),
+            self.canvas_id,
+            self.attr_id,
+        ];
+        let cur = order
+            .iter()
+            .position(|id| ctx.memory(|m| m.has_focus(*id)))
+            .unwrap_or(1);
+        let next = if backwards {
+            (cur + order.len() - 1) % order.len()
+        } else {
+            (cur + 1) % order.len()
+        };
+        ctx.memory_mut(|m| m.request_focus(order[next]));
     }
 }
 
@@ -645,11 +781,15 @@ impl eframe::App for App {
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("toolbox")
-            .default_size(190.0)
+            .default_size(230.0)
+            .size_range(180.0..=380.0)
             .show(ui, |ui| self.toolbox(ui));
         egui::Panel::right("attributes")
-            .default_size(240.0)
+            .default_size(260.0)
+            .size_range(200.0..=420.0)
             .show(ui, |ui| self.attributes(ui));
         egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
+        self.palette_ui(&ctx);
+        self.shortcuts_ui(&ctx);
     }
 }
