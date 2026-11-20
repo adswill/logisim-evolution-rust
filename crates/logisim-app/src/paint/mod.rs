@@ -5,8 +5,10 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, Vec2};
 use logisim_core::{Direction, Port, Value};
 
+pub mod arith;
 pub mod block;
 pub mod gates;
+pub mod memory;
 pub mod plexers;
 pub mod ttl;
 pub mod wiring;
@@ -329,6 +331,8 @@ const LIBRARIES: &[(&str, LibraryPainters)] = &[
     ("Wiring", wiring::painter),
     ("TTL", ttl::painter),
     ("Plexers", plexers::painter),
+    ("Arithmetic", arith::painter),
+    ("Memory", memory::painter),
 ];
 
 pub fn painter_for(library: &str, part: &str) -> &'static dyn PartPainter {
