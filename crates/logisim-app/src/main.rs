@@ -17,6 +17,7 @@ mod panels;
 mod prefs;
 mod sim;
 mod style;
+mod tools;
 mod windows;
 
 use eframe::egui;

@@ -74,6 +74,7 @@ pub fn registered_windows() -> Vec<Box<dyn AppWindow>> {
     let mut reg: Vec<Box<dyn AppWindow>> = vec![];
     reg.push(Box::new(ProjectInfoWindow));
     crate::log_ui::register(&mut reg);
+    crate::tools::register(&mut reg);
     reg
 }
 
