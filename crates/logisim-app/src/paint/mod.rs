@@ -8,6 +8,7 @@ use logisim_core::{Direction, Port, Value};
 pub mod arith;
 pub mod block;
 pub mod gates;
+pub mod io;
 pub mod memory;
 pub mod plexers;
 pub mod ttl;
@@ -364,6 +365,7 @@ const LIBRARIES: &[(&str, LibraryPainters)] = &[
     ("Plexers", plexers::painter),
     ("Arithmetic", arith::painter),
     ("Memory", memory::painter),
+    ("Input/Output", io::painter),
 ];
 
 pub fn painter_for(library: &str, part: &str) -> &'static dyn PartPainter {
