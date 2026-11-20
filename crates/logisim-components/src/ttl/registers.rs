@@ -107,10 +107,160 @@ pub fn chip_74374() -> Ttl {
     })
 }
 
+// ---- shift registers -------------------------------------------------------------------------
+//
+// State convention (as Logisim's `ShiftRegisterData`): index 0 is the output end; shifting "down"
+// moves everything towards index 0 and inserts at the top index.
+
+fn push_down(v: &mut [Value], x: Value) {
+    v.rotate_left(1);
+    let n = v.len();
+    v[n - 1] = x;
+}
+fn push_up(v: &mut [Value], x: Value) {
+    v.rotate_right(1);
+    v[0] = x;
+}
+
+/// 74164: 8-bit serial-in parallel-out shift register, async clear (pin 9, active low).
+/// Serial input = A AND B (pins 1, 2); clock pin 8; QA..QH = 3,4,5,6,10,11,12,13.
+pub fn chip_74164() -> Ttl {
+    const Q: [u8; 8] = [3, 4, 5, 6, 10, 11, 12, 13];
+    let spec = Spec::new("74164", 14, &Q);
+    let mut s = [Value::FALSE; 8];
+    let mut edge = Edge::new();
+    Ttl::new(spec, move |p| {
+        let triggered = edge.rising(p.get(8));
+        if p.lo(9) {
+            s = [Value::FALSE; 8];
+        } else if triggered {
+            push_up(&mut s, bit(p.hi(1) && p.hi(2)));
+        }
+        for (i, &q) in Q.iter().enumerate() {
+            p.set(q, s[i], 4);
+        }
+    })
+}
+
+/// 74165: 8-bit parallel-load shift register. SH/LD = 1 (low loads, asynchronous), CLK = 2,
+/// CLK INH = 15, serial in = 10, P0..P7 = 11,12,13,14,3,4,5,6, QH = 9, /QH = 7.
+pub fn chip_74165() -> Ttl {
+    // index 0 = H (output end)
+    const P: [u8; 8] = [6, 5, 4, 3, 14, 13, 12, 11];
+    let spec = Spec::new("74165", 16, &[7, 9]);
+    let mut s = [Value::FALSE; 8];
+    let mut edge = Edge::new();
+    Ttl::new(spec, move |p| {
+        let triggered = edge.rising(p.get(2));
+        if p.lo(1) {
+            for (x, &pin) in s.iter_mut().zip(P.iter()) {
+                *x = p.get(pin);
+            }
+        } else if triggered && p.lo(15) {
+            push_down(&mut s, p.get(10));
+        }
+        p.set(7, !s[0], 4);
+        p.set(9, s[0], 4);
+    })
+}
+
+/// 74166: 8-bit parallel-load shift register with synchronous load and async clear.
+/// SER = 1, P0..P3 = 2..5, CLK INH = 6, CLK = 7, CLR = 9, P4..P6 = 10..12, QH = 13, P7 = 14,
+/// SH/LD = 15 (low loads).
+pub fn chip_74166() -> Ttl {
+    const P: [u8; 8] = [14, 12, 11, 10, 5, 4, 3, 2];
+    let spec = Spec::new("74166", 16, &[13]);
+    let mut s = [Value::FALSE; 8];
+    let mut edge = Edge::new();
+    Ttl::new(spec, move |p| {
+        let triggered = edge.rising(p.get(7));
+        if p.lo(9) {
+            s = [Value::FALSE; 8];
+        } else if triggered && p.get(6) != Value::TRUE {
+            match p.get(15) {
+                Value::FALSE => {
+                    for (x, &pin) in s.iter_mut().zip(P.iter()) {
+                        *x = p.get(pin);
+                    }
+                }
+                Value::TRUE => push_down(&mut s, p.get(1)),
+                _ => {}
+            }
+        }
+        p.set(13, s[0], 4);
+    })
+}
+
+/// 74194: 4-bit bidirectional universal shift register. nCLR = 1, DSR = 2, A..D = 3..6,
+/// DSL = 7, S0 = 9, S1 = 10, CLK = 11, QD..QA = 12..15. S1S0: 00 hold, 01 right (QA→QD),
+/// 10 left, 11 load.
+pub fn chip_74194() -> Ttl {
+    let spec = Spec::new("74194", 16, &[12, 13, 14, 15]);
+    // index 0 = D (LSB) ... index 3 = A (MSB)
+    let mut s = [Value::FALSE; 4];
+    let mut edge = Edge::new();
+    Ttl::new(spec, move |p| {
+        let triggered = edge.rising(p.get(11));
+        if p.lo(1) {
+            s = [Value::FALSE; 4];
+        } else if triggered {
+            match (p.hi(10), p.hi(9)) {
+                (true, true) => {
+                    for (x, pin) in s.iter_mut().zip([6u8, 5, 4, 3]) {
+                        *x = p.get(pin);
+                    }
+                }
+                (true, false) => push_up(&mut s, p.get(7)),
+                (false, true) => push_down(&mut s, p.get(2)),
+                _ => {}
+            }
+        }
+        for (pin, i) in [(15u8, 3usize), (14, 2), (13, 1), (12, 0)] {
+            p.set(pin, s[i], 1);
+        }
+    })
+}
+
+/// 74299: 8-bit universal shift/storage register with tri-state I/O. S0 = 1, S1 = 19,
+/// nOE1 = 2, nOE2 = 3, CLK = 12, nCLR = 9, SR = 11, SL = 18, QA = 8, QH = 17,
+/// I/O A..H = 7,13,6,14,5,15,4,16.
+pub fn chip_74299() -> Ttl {
+    // index 0 = H ... index 7 = A
+    const IO: [u8; 8] = [16, 4, 15, 5, 14, 6, 13, 7];
+    let spec = Spec::new("74299", 20, &[8, 17]).inouts(&IO);
+    let mut s = [Value::FALSE; 8];
+    let mut edge = Edge::new();
+    Ttl::new(spec, move |p| {
+        let triggered = edge.rising(p.get(12));
+        if p.lo(9) {
+            s = [Value::FALSE; 8];
+        } else if triggered {
+            match (p.hi(19), p.hi(1)) {
+                (true, true) => {
+                    for (x, &pin) in s.iter_mut().zip(IO.iter()) {
+                        *x = p.get(pin);
+                    }
+                }
+                (true, false) => push_up(&mut s, p.get(18)),
+                (false, true) => push_down(&mut s, p.get(11)),
+                _ => {}
+            }
+        }
+        p.set(8, s[7], 1);
+        p.set(17, s[0], 1);
+        let on = p.lo(2) && p.lo(3) && (p.lo(1) || p.lo(19));
+        for (i, &pin) in IO.iter().enumerate() {
+            p.set(pin, if on { s[i] } else { Value::UNKNOWN }, 1);
+        }
+    })
+}
+
 pub fn parts() -> Vec<PartDesc> {
     chips! {
         "74173" => chip_74173, "74175" => chip_74175, "74273" => chip_74273,
-        "74374" => chip_74374, "74377" => chip_74377,
+        "74374" => chip_74374, "74377" => chip_74377, "74164" => chip_74164,
+        "74165" => chip_74165, "74166" => chip_74166, "74194" => chip_74194,
+        "74299" => chip_74299,
     }
 }
 
@@ -181,5 +331,96 @@ mod tests {
         r.put(1, false);
         r.put(15, true); // clear
         assert_eq!(r.read_n(&[3, 4, 5, 6]), Some(0));
+    }
+
+    #[test]
+    fn shift_registers() {
+        let q = [3u8, 4, 5, 6, 10, 11, 12, 13];
+        let mut r = Rig::new(chip_74164());
+        r.put(9, true);
+        r.put(1, true);
+        r.put(2, true);
+        r.pulse(8);
+        r.put(2, false);
+        r.pulse(8);
+        r.pulse(8);
+        assert_eq!(r.read_n(&q), Some(0b100)); // 1 entered, shifted twice
+        r.put(9, false);
+        assert_eq!(r.read_n(&q), Some(0));
+
+        // 74165: load parallel data, shift out QH first = P7
+        let mut r = Rig::new(chip_74165());
+        r.put(15, false);
+        r.put(1, true);
+        r.put_n(&[11, 12, 13, 14, 3, 4, 5, 6], 0b1000_0001);
+        r.put(1, false); // load
+        r.put(1, true);
+        let mut out = vec![];
+        for _ in 0..8 {
+            out.push(r.hi(9));
+            r.pulse(2);
+        }
+        assert_eq!(out, [true, false, false, false, false, false, false, true]);
+        let mut r = Rig::new(chip_74166());
+        r.put(9, true);
+        r.put(15, false);
+        r.put_n(&[2, 3, 4, 5, 10, 11, 12, 14], 0b0000_0010);
+        r.pulse(7); // load
+        r.put(15, true);
+        let mut out = vec![];
+        for _ in 0..8 {
+            out.push(r.hi(13));
+            r.pulse(7);
+        }
+        assert_eq!(out, [false, false, false, false, false, false, true, false]);
+
+        // 74194 modes
+        let mut r = Rig::new(chip_74194());
+        r.put(1, true);
+        r.put_n(&[3, 4, 5, 6], 0b0001); // A=1
+        r.put(9, true);
+        r.put(10, true);
+        r.pulse(11); // load
+        assert_eq!(r.read_n(&[15, 14, 13, 12]), Some(0b0001));
+        r.put(10, false); // shift right: QA -> QB
+        r.put(2, false);
+        r.pulse(11);
+        assert_eq!(r.read_n(&[15, 14, 13, 12]), Some(0b0010));
+        r.put(9, false);
+        r.put(10, true); // shift left, DSL = 1
+        r.put(7, true);
+        r.pulse(11);
+        assert_eq!(r.read_n(&[15, 14, 13, 12]), Some(0b1001));
+        r.put(10, false); // hold
+        r.pulse(11);
+        assert_eq!(r.read_n(&[15, 14, 13, 12]), Some(0b1001));
+    }
+
+    #[test]
+    fn universal_74299() {
+        let io = [7u8, 13, 6, 14, 5, 15, 4, 16];
+        let mut r = Rig::new(chip_74299());
+        for &p in &io {
+            r.set(p, Value::UNKNOWN);
+        }
+        r.put(9, true);
+        r.put(2, false);
+        r.put(3, false);
+        r.put(1, true);
+        r.put(19, true);
+        for (i, &p) in io.iter().enumerate() {
+            r.put(p, i == 0); // A = 1
+        }
+        r.pulse(12); // load
+        // outputs disabled in load mode (S0=S1=1) -> I/O float... pins driven by test; QA shows A
+        assert!(r.hi(8));
+        r.put(19, false); // shift right (S0=1)
+        for &p in &io {
+            r.set(p, Value::UNKNOWN);
+        }
+        r.put(11, false);
+        r.pulse(12);
+        assert!(!r.hi(8));
+        assert!(r.hi(13)); // B output now 1 (enabled)
     }
 }
