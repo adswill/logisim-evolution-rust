@@ -14,6 +14,7 @@ use crate::registry::{Library, PartDesc};
 pub mod contents;
 pub mod counter;
 pub mod flipflop;
+pub mod hexfile;
 pub mod mem;
 pub mod random;
 pub mod ram;
@@ -23,6 +24,7 @@ pub mod shift_register;
 
 pub use contents::MemContents;
 pub use counter::{Counter, CounterOptions, OnGoal};
+pub use hexfile::{load_binary, load_file, load_text, save_binary, save_file, save_text, Endian, HexFormat};
 pub use flipflop::{FlipFlop, FlipFlopKind, FlipFlopOptions};
 pub use mem::{DataBus, EnableMode, LineSize, ReadBehavior};
 pub use ram::{Ram, RamOptions, RamType};
