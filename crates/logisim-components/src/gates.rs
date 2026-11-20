@@ -3,6 +3,28 @@
 
 use logisim_core::{BitWidth, Component, Direction, Location, Port, PortKind, PropagateCtx, Value};
 
+use crate::registry::{Library, PartDesc};
+
+/// The Gates library with default options for each part.
+pub fn library() -> Library {
+    let part = |name, make: fn() -> Box<dyn Component>| PartDesc { name, make };
+    Library {
+        name: "Gates",
+        parts: vec![
+            part("NOT Gate", || Box::new(Buffer::not(1))),
+            part("Buffer", || Box::new(Buffer::new(1))),
+            part("AND Gate", || Box::new(Gate::and(GateOptions::default()))),
+            part("OR Gate", || Box::new(Gate::or(GateOptions::default()))),
+            part("NAND Gate", || Box::new(Gate::nand(GateOptions::default()))),
+            part("NOR Gate", || Box::new(Gate::nor(GateOptions::default()))),
+            part("XOR Gate", || Box::new(Gate::xor(GateOptions::default()))),
+            part("XNOR Gate", || Box::new(Gate::xnor(GateOptions::default()))),
+            part("Controlled Buffer", || Box::new(ControlledBuffer::buffer(1))),
+            part("Controlled Inverter", || Box::new(ControlledBuffer::inverter(1))),
+        ],
+    }
+}
+
 /// Gate propagation delay in simulator ticks.
 pub const DELAY: u32 = 1;
 
@@ -607,5 +629,15 @@ mod tests {
         rh.set(Value::FALSE);
         c.refresh(r);
         assert_eq!(q(&mut c), (Value::FALSE, Value::TRUE));
+    }
+
+    #[test]
+    fn registry_lists_every_gate() {
+        let lib = library();
+        assert_eq!(lib.parts.len(), 10);
+        for p in &lib.parts {
+            assert_eq!((p.make)().name(), p.name);
+        }
+        assert!(crate::all_libraries().iter().any(|l| l.name == "Gates"));
     }
 }

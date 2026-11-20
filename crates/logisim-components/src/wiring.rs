@@ -1,7 +1,19 @@
 //! Minimal wiring parts: constant sources and input pins.
 use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use crate::registry::{Library, PartDesc};
 use std::cell::Cell;
 use std::rc::Rc;
+
+/// The (so far minimal) wiring library.
+pub fn library() -> Library {
+    Library {
+        name: "Wiring",
+        parts: vec![
+            PartDesc { name: "Pin", make: || Box::new(Pin::bit(false)) },
+            PartDesc { name: "Clock", make: || Box::new(Clock { high: false }) },
+        ],
+    }
+}
 
 /// Shared handle for changing a [`Pin`]'s value after it was placed in a circuit.
 /// Call `Circuit::refresh(id)` afterwards to propagate the change.
