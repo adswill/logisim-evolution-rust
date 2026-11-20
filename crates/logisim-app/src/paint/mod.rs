@@ -203,8 +203,12 @@ pub struct Gfx<'a> {
     pub theme: &'a Theme,
     pub at: (i32, i32),
     pub facing: Direction,
+    /// Mirrored top-to-bottom before rotating (flip).
+    pub mirror: bool,
     /// 1.0 normal; below 1 for ghost previews.
     pub alpha: f32,
+    /// Radius of the port dots in screen pixels (small when idle, larger while wiring).
+    pub port_px: f32,
 }
 
 impl Gfx<'_> {
@@ -217,6 +221,7 @@ impl Gfx<'_> {
     }
     /// Local east-facing point → screen.
     pub fn p(&self, x: f32, y: f32) -> Pos2 {
+        let y = if self.mirror { -y } else { y };
         let (rx, ry) = rotate_f(self.facing, x, y);
         self.view
             .to_screen(self.at.0 as f32 + rx, self.at.1 as f32 + ry)
@@ -348,8 +353,11 @@ pub fn union(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> (f32, f32, f32
 fn port_dots(g: &Gfx, v: &PartView) {
     for (i, p) in v.ports.iter().enumerate() {
         let c = v.port_color(g.theme, i);
-        let at = (p.offset.x as f32, p.offset.y as f32);
-        g.circle(at, 2.2, Some(c), c);
+        g.painter.circle_filled(
+            g.p(p.offset.x as f32, p.offset.y as f32),
+            g.port_px,
+            g.col(c),
+        );
     }
 }
 
@@ -370,6 +378,7 @@ pub fn world_bounds(def: &ComponentDef, v: &PartView) -> Rect {
     let corners = [(b.0, b.1), (b.2, b.1), (b.2, b.3), (b.0, b.3)];
     let mut r = Rect::NOTHING;
     for (x, y) in corners {
+        let y = if def.mirror { -y } else { y };
         let (rx, ry) = rotate_f(def.facing, x, y);
         r.extend_with(Pos2::new(def.at.0 as f32 + rx, def.at.1 as f32 + ry));
     }

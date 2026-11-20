@@ -1,6 +1,7 @@
-//! Problems worth pointing out on the canvas: unconnected inputs and bit-width mismatches.
-//! Pure functions over the circuit definition so they are easy to test; the canvas only draws
-//! the badges and explains the fix in a tooltip.
+//! Problems worth pointing out on the canvas: unconnected required inputs, bit-width
+//! mismatches, and (while simulating) inputs left floating whose part now outputs X or E.
+//! Issues are grouped per part so the canvas can draw ONE small badge per part and list every
+//! issue, with its fix, in the tooltip. Pure functions, so they are easy to test.
 
 use crate::model::P;
 use crate::nets::NetAnalysis;
@@ -14,16 +15,44 @@ pub enum Kind {
     WidthMismatch,
 }
 
+/// One thing wrong with a port of a part.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Problem {
+pub struct Issue {
     pub at: P,
-    /// Index of the component the port belongs to.
-    pub comp: usize,
     pub kind: Kind,
     /// What is wrong, in plain words.
     pub title: String,
     /// What to do about it.
     pub fix: String,
+}
+
+/// All issues of one part (never empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    /// Index of the component in the circuit.
+    pub comp: usize,
+    pub issues: Vec<Issue>,
+}
+
+impl Problem {
+    /// Tooltip text: every issue, then each distinct fix once.
+    pub fn tooltip(&self, part_name: &str) -> Vec<String> {
+        let n = self.issues.len();
+        let mut lines = vec![format!(
+            "{part_name}: {n} problem{}",
+            if n == 1 { "" } else { "s" }
+        )];
+        lines.extend(self.issues.iter().map(|i| format!("• {}", i.title)));
+        let mut fixes: Vec<&str> = vec![];
+        for i in &self.issues {
+            if !fixes.contains(&i.fix.as_str()) {
+                fixes.push(&i.fix);
+            }
+        }
+        lines.push(String::new());
+        lines.extend(fixes.into_iter().map(|f| format!("Fix: {f}")));
+        lines
+    }
 }
 
 /// Geometry of one placed part, as the editor caches it.
@@ -42,42 +71,79 @@ fn exempt(name: &str) -> bool {
     )
 }
 
-pub fn diagnose(c: &CircuitDef, parts: &[PartPorts], nets: &NetAnalysis) -> Vec<Problem> {
-    let mut out = vec![];
+/// `output_unknown(i)` says whether part `i` currently drives X or E on an output (live
+/// simulation); pass `|_| false` when not simulating.
+pub fn diagnose(
+    parts: &[PartPorts],
+    nets: &NetAnalysis,
+    output_unknown: &dyn Fn(usize) -> bool,
+) -> Vec<Problem> {
     let in_net: HashSet<P> = nets
         .nets
         .iter()
         .flat_map(|n| n.points.iter().copied())
         .collect();
-    // how many ports sit at each point (two ports touching directly are connected)
+    // two ports touching directly are connected
     let mut port_count: HashMap<P, usize> = HashMap::new();
     for p in parts {
         for a in p.abs {
             *port_count.entry(*a).or_default() += 1;
         }
     }
+    let mut by_part: Vec<Vec<Issue>> = vec![vec![]; parts.len()];
+
     // ---- unconnected inputs
     for (ci, part) in parts.iter().enumerate() {
         if exempt(part.name) {
             continue;
         }
+        let inputs = part
+            .ports
+            .iter()
+            .filter(|p| p.kind == PortKind::Input)
+            .count();
+        let mut nth = 0;
         for (i, port) in part.ports.iter().enumerate() {
             if port.kind != PortKind::Input {
                 continue;
             }
+            nth += 1;
             let at = part.abs[i];
-            let touching = port_count.get(&at).copied().unwrap_or(0) > 1;
-            if !in_net.contains(&at) && !touching {
-                out.push(Problem {
+            let connected = in_net.contains(&at) || port_count.get(&at).copied().unwrap_or(0) > 1;
+            if connected {
+                continue;
+            }
+            // Required inputs always warn. Optional ones (enable, clear, load...) float by default;
+            // they only matter once the part is visibly producing X or E.
+            let bad_output = output_unknown(ci);
+            if port.required || bad_output {
+                let which = if inputs > 1 {
+                    format!("Input {nth} of {}", part.name)
+                } else {
+                    format!("The input of {}", part.name)
+                };
+                let (title, fix) = if port.required {
+                    (
+                        format!("{which} is not connected"),
+                        "Draw a wire to it, or tie it to a Constant, Power or Ground part."
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        format!("{which} is not connected and the output is unknown"),
+                        "Connect it, or tie it to a Constant, Power or Ground part, so the output gets a defined value.".to_string(),
+                    )
+                };
+                by_part[ci].push(Issue {
                     at,
-                    comp: ci,
                     kind: Kind::UnconnectedInput,
-                    title: format!("An input of {} is not connected", part.name),
-                    fix: "Draw a wire to it, or tie it to a Constant, Power or Ground part. An unconnected input floats and can make the output unknown.".into(),
+                    title,
+                    fix,
                 });
             }
         }
     }
+
     // ---- width mismatches: ports on one net must agree
     for net in &nets.nets {
         let mut widths: Vec<(usize, P, BitWidth)> = vec![];
@@ -104,25 +170,30 @@ pub fn diagnose(c: &CircuitDef, parts: &[PartPorts], nets: &NetAnalysis) -> Vec<
         let tie = count.values().filter(|n| **n == count[&majority]).count() > 1;
         for (ci, at, w) in widths {
             if w != majority || tie {
-                out.push(Problem {
+                by_part[ci].push(Issue {
                     at,
-                    comp: ci,
                     kind: Kind::WidthMismatch,
-                    title: format!("{}-bit port on a {}-bit wire", w.get(), majority.get()),
+                    title: format!("A {}-bit port is on a {}-bit wire", w.get(), majority.get()),
                     fix: "Make the bit widths match: change the part's \"Data bits\" option, or use a Splitter to join or split a bus.".into(),
                 });
             }
         }
     }
-    let _ = c;
-    out
+
+    by_part
+        .into_iter()
+        .enumerate()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(comp, issues)| Problem { comp, issues })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::nets::HueMemory;
-    use logisim_format::{ComponentDef, WireDef};
+    use crate::sim::Sim;
+    use logisim_format::{ComponentDef, ProjectFile, WireDef};
 
     struct Built {
         c: CircuitDef,
@@ -141,7 +212,7 @@ mod tests {
             abs.push(
                 ps.iter()
                     .map(|p| {
-                        let o = d.facing.rotate(p.offset);
+                        let o = d.facing.place(d.mirror, p.offset);
                         (d.at.0 + o.x, d.at.1 + o.y)
                     })
                     .collect(),
@@ -165,7 +236,7 @@ mod tests {
         }
     }
 
-    fn run(b: &Built) -> Vec<Problem> {
+    fn run_with(b: &Built, unknown: &dyn Fn(usize) -> bool) -> Vec<Problem> {
         let parts: Vec<PartPorts> = (0..b.names.len())
             .map(|i| PartPorts {
                 name: &b.names[i],
@@ -174,7 +245,11 @@ mod tests {
             })
             .collect();
         let nets = HueMemory::default().analyze(&b.c, &b.abs.clone());
-        diagnose(&b.c, &parts, &nets)
+        diagnose(&parts, &nets, unknown)
+    }
+
+    fn run(b: &Built) -> Vec<Problem> {
+        run_with(b, &|_| false)
     }
 
     fn comp(lib: &str, part: &str, x: i32, y: i32) -> ComponentDef {
@@ -182,21 +257,76 @@ mod tests {
     }
 
     #[test]
-    fn unconnected_gate_input_is_flagged_and_connected_ones_are_not() {
-        // AND at (100,100): inputs (50,80) and (50,120). Wire only the first.
-        let b = build(
+    fn lone_two_input_and_gives_one_badge_listing_both_inputs() {
+        let b = build(vec![comp("Gates", "AND Gate", 100, 100)], &[]);
+        let p = run(&b);
+        assert_eq!(p.len(), 1, "one badge per part");
+        assert_eq!(p[0].issues.len(), 2);
+        let t = p[0].tooltip("AND Gate").join("\n");
+        assert!(
+            t.contains("Input 1 of AND Gate") && t.contains("Input 2 of AND Gate"),
+            "{t}"
+        );
+        assert_eq!(
+            t.matches("Fix:").count(),
+            1,
+            "the same fix is listed once: {t}"
+        );
+    }
+
+    #[test]
+    fn connecting_one_input_leaves_one_issue_and_both_leaves_none() {
+        let one = build(
             vec![comp("Gates", "AND Gate", 100, 100)],
             &[((0, 80), (50, 80))],
         );
-        let p = run(&b);
+        let p = run(&one);
         assert_eq!(p.len(), 1);
-        assert_eq!((p[0].kind, p[0].at), (Kind::UnconnectedInput, (50, 120)));
-        assert!(p[0].fix.contains("Constant"));
+        assert_eq!((p[0].issues.len(), p[0].issues[0].at), (1, (50, 120)));
         let both = build(
             vec![comp("Gates", "AND Gate", 100, 100)],
             &[((0, 80), (50, 80)), ((0, 120), (50, 120))],
         );
         assert!(run(&both).is_empty());
+    }
+
+    #[test]
+    fn a_fresh_counter_alone_has_no_badges_even_while_simulating() {
+        let b = build(vec![comp("Memory", "Counter", 100, 100)], &[]);
+        assert!(run(&b).is_empty(), "optional control pins must not warn");
+        // ... and with the live simulation of the unconnected counter
+        let mut project = ProjectFile::new("t", "t");
+        project.circuits.push(b.c.clone());
+        let mut sim = Sim::build(&project, "t").unwrap();
+        let mut pts = vec![];
+        for a in &b.abs[0] {
+            pts.push(logisim_core::Location::new(a.0, a.1));
+        }
+        sim.snapshot(pts.clone());
+        let ports = &b.ports[0];
+        let unknown = |_: usize| {
+            ports.iter().enumerate().any(|(i, p)| {
+                p.kind == PortKind::Output
+                    && sim
+                        .value_at(pts[i])
+                        .is_some_and(|v| v.is_error() || v.is_unknown())
+            })
+        };
+        assert!(
+            run_with(&b, &unknown).is_empty(),
+            "a counter alone must stay quiet while simulating"
+        );
+    }
+
+    #[test]
+    fn optional_input_warns_only_when_the_output_is_unknown() {
+        let b = build(vec![comp("Memory", "Counter", 100, 100)], &[]);
+        let p = run_with(&b, &|_| true);
+        assert_eq!(p.len(), 1);
+        assert!(p[0]
+            .issues
+            .iter()
+            .all(|i| i.title.contains("output is unknown")));
     }
 
     #[test]
@@ -214,7 +344,6 @@ mod tests {
 
     #[test]
     fn ports_touching_directly_count_as_connected() {
-        // output Pin (input-kind port) placed exactly on a Pin's output port
         let b = build(
             vec![
                 comp("Wiring", "Pin", 0, 0),
@@ -226,8 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn width_mismatch_is_reported_on_the_minority_ports() {
-        // two 1-bit pins and one 4-bit output pin all on one wire
+    fn width_mismatch_is_reported_per_part_and_always_warns() {
         let wires = [((0, 0), (100, 0))];
         let b = build(
             vec![
@@ -239,13 +367,23 @@ mod tests {
             ],
             &wires,
         );
-        let p: Vec<_> = run(&b)
-            .into_iter()
-            .filter(|p| p.kind == Kind::WidthMismatch)
+        let p = run(&b);
+        let mism: Vec<_> = p
+            .iter()
+            .flat_map(|p| p.issues.iter())
+            .filter(|i| i.kind == Kind::WidthMismatch)
             .collect();
-        assert!(!p.is_empty());
-        assert!(p.iter().any(|p| p.title.starts_with("4-bit")), "{p:?}");
-        assert!(p.iter().all(|p| p.fix.contains("Splitter")));
+        assert!(!mism.is_empty());
+        assert!(
+            mism.iter().any(|i| i.title.starts_with("A 4-bit")),
+            "{mism:?}"
+        );
+        assert!(mism.iter().all(|i| i.fix.contains("Splitter")));
+        let mut seen = HashSet::new();
+        assert!(
+            p.iter().all(|p| seen.insert(p.comp)),
+            "no part appears twice"
+        );
     }
 
     #[test]

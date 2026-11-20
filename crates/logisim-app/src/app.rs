@@ -139,6 +139,8 @@ pub struct App {
     pub(crate) frame: u64,
     pub(crate) windows: crate::windows::Windows,
     pub(crate) problems: Vec<crate::diagnostics::Problem>,
+    /// Which parts had an unknown output when `problems` was last computed.
+    pub(crate) unknown_sig: Vec<bool>,
     /// Dev/screenshot flag `--minimap` (not saved).
     pub(crate) dev_minimap: bool,
     pub(crate) fit_requested: bool,
@@ -198,6 +200,7 @@ impl App {
             frame: 0,
             windows: crate::windows::Windows::default(),
             problems: vec![],
+            unknown_sig: vec![],
             dev_minimap: false,
             fit_requested: false,
             theme_override: None,
@@ -420,6 +423,12 @@ impl App {
                 .iter()
                 .flat_map(|i| i.abs.iter().map(|p| loc(*p)));
             sim.snapshot(wire_points(self.ed.circuit()).chain(ports));
+        }
+        // live "output is X/E" flags can change every tick: refresh problems only when they do
+        if self.unknown_sig.len() != self.infos.len()
+            || self.unknown_signature() != self.unknown_sig
+        {
+            self.refresh_problems();
         }
     }
 

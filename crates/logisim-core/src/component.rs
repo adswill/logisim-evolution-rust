@@ -17,6 +17,10 @@ pub struct Port {
     pub offset: Location,
     pub kind: PortKind,
     pub width: BitWidth,
+    /// A required input is one the part cannot do anything useful without (a gate's inputs). The
+    /// editor warns when a required input is left unconnected; other inputs (enable, clear,
+    /// load, ...) may float, as in Logisim. Default: not required.
+    pub required: bool,
 }
 
 impl Port {
@@ -27,7 +31,13 @@ impl Port {
             offset: Location::new(x, y),
             kind,
             width,
+            required: false,
         }
+    }
+    /// Mark this port as required (see [`Port::required`]).
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
     }
 }
 

@@ -333,7 +333,7 @@ impl Component for Gate {
         let mut p = vec![Port::new(0, 0, PortKind::Output, self.opts.width)];
         for i in 0..self.opts.inputs {
             let o = input_offset(&self.opts, self.kind, i);
-            p.push(Port::new(o.x, o.y, PortKind::Input, self.opts.width));
+            p.push(Port::new(o.x, o.y, PortKind::Input, self.opts.width).required());
         }
         p
     }
@@ -414,7 +414,7 @@ impl Component for Buffer {
         let x = if self.inverting { -30 } else { -20 };
         vec![
             Port::new(0, 0, PortKind::Output, self.width),
-            Port::new(x, 0, PortKind::Input, self.width),
+            Port::new(x, 0, PortKind::Input, self.width).required(),
         ]
     }
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx) {
@@ -503,8 +503,8 @@ impl Component for ControlledBuffer {
         let x = if self.inverting { -30 } else { -20 };
         vec![
             Port::new(0, 0, PortKind::Output, self.width),
-            Port::new(x, 0, PortKind::Input, self.width),
-            Port::new(-10, -10, PortKind::Input, BitWidth::ONE),
+            Port::new(x, 0, PortKind::Input, self.width).required(),
+            Port::new(-10, -10, PortKind::Input, BitWidth::ONE).required(),
         ]
     }
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx) {

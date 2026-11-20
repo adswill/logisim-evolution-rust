@@ -319,7 +319,9 @@ impl App {
             theme: th,
             at: def.at,
             facing: def.facing,
+            mirror: def.mirror,
             alpha: 0.55,
+            port_px: 2.0,
         };
         paint::paint_part(&g, &v);
         if resp.clicked_by(PointerButton::Primary) {
@@ -376,7 +378,9 @@ impl App {
             theme: th,
             at: def.at,
             facing: def.facing,
+            mirror: def.mirror,
             alpha: 0.55,
+            port_px: 2.0,
         };
         paint::paint_part(&g, &v);
     }
@@ -640,7 +644,13 @@ impl App {
                 theme: th,
                 at,
                 facing: def.facing,
+                mirror: def.mirror,
                 alpha: 1.0,
+                port_px: if matches!(self.tool, Tool::Wire) {
+                    4.0
+                } else {
+                    2.0
+                },
             };
             paint::paint_part(&g, &v);
             if let Some(err) = &self.infos[i].error {

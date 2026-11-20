@@ -258,7 +258,9 @@ pub fn render(project: &ProjectFile, circuit: &str, opts: &ExportOptions) -> Res
                 theme: &th,
                 at: d.at,
                 facing: d.facing,
+                mirror: d.mirror,
                 alpha: 1.0,
+                port_px: 2.0,
             };
             paint::paint_part(&g, &view_of(i));
         }

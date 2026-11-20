@@ -13,8 +13,28 @@ use logisim_format::SUBCIRCUIT_LIBRARY;
 const HOVER_PX: f32 = 11.0;
 
 impl App {
-    /// Recompute unconnected-input and width problems for the open circuit.
+    /// Whether the part currently drives X or E on an output (live simulation only).
+    fn output_unknown(&self, comp: usize) -> bool {
+        let Some(sim) = &self.sim else { return false };
+        let info = &self.infos[comp];
+        info.ports.iter().zip(&info.abs).any(|(p, a)| {
+            p.kind == PortKind::Output
+                && sim
+                    .value_at(logisim_core::Location::new(a.0, a.1))
+                    .is_some_and(|v| v.is_error() || v.is_unknown())
+        })
+    }
+
+    /// Per-part "output is unknown" flags; when they change, problems are recomputed.
+    pub(crate) fn unknown_signature(&self) -> Vec<bool> {
+        (0..self.infos.len())
+            .map(|i| self.output_unknown(i))
+            .collect()
+    }
+
+    /// Recompute the problems of the open circuit (one entry per affected part).
     pub(crate) fn refresh_problems(&mut self) {
+        let sig = self.unknown_signature();
         let parts: Vec<PartPorts> = self
             .infos
             .iter()
@@ -24,7 +44,8 @@ impl App {
                 abs: &i.abs,
             })
             .collect();
-        self.problems = diagnostics::diagnose(self.ed.circuit(), &parts, &self.nets);
+        self.problems = diagnostics::diagnose(&parts, &self.nets, &|i| sig[i]);
+        self.unknown_sig = sig;
     }
 
     /// Small tooltip box near the pointer.
@@ -45,7 +66,8 @@ impl App {
         painter.galley(rect.min + Vec2::splat(7.0), galley, th.text);
     }
 
-    /// Warning triangles on ports with problems; returns the problem under the pointer.
+    /// One small warning triangle per part with problems, just outside its top-right corner
+    /// (never over ports or labels); returns the problem under the pointer.
     pub(crate) fn draw_badges(
         &self,
         painter: &egui::Painter,
@@ -59,24 +81,26 @@ impl App {
         } else {
             egui::Color32::from_rgb(196, 120, 0)
         };
-        let r = (7.0 * view.zoom).clamp(6.0, 12.0);
+        let r = (4.5 * view.zoom).clamp(5.0, 8.0);
         for p in &self.problems {
-            let c = view.to_screen(p.at.0 as f32 + 9.0, p.at.1 as f32 - 9.0);
+            let v = self.part_view(p.comp, false, &[]);
+            let b = paint::world_bounds(v.def, &v);
+            let c = view.to_screen(b.max.x, b.min.y) + Vec2::new(r + 3.0, -(r + 3.0));
             let tri = vec![
                 c + Vec2::new(0.0, -r),
                 c + Vec2::new(r, r * 0.8),
                 c + Vec2::new(-r, r * 0.8),
             ];
             painter.add(egui::Shape::convex_polygon(
-                tri.clone(),
+                tri,
                 amber,
-                Stroke::new(1.2, th.bg),
+                Stroke::new(1.0, th.bg),
             ));
             painter.text(
                 c + Vec2::new(0.0, r * 0.25),
                 Align2::CENTER_CENTER,
                 "!",
-                egui::FontId::proportional(r * 1.2),
+                egui::FontId::proportional(r * 1.15),
                 egui::Color32::BLACK,
             );
             if cursor.is_some_and(|m| m.distance(c) <= HOVER_PX) {
@@ -110,12 +134,7 @@ impl App {
     ) {
         let Some(m) = cursor else { return };
         if let Some(p) = self.draw_badges(painter, view, th, Some(m)) {
-            Self::draw_tip(
-                painter,
-                th,
-                m,
-                &[p.title, String::new(), format!("Fix: {}", p.fix)],
-            );
+            Self::draw_tip(painter, th, m, &p.tooltip(&self.infos[p.comp].name));
             return;
         }
         if let Some((ci, pi)) = self.port_under(view, m) {
