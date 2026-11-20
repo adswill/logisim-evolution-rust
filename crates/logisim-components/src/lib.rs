@@ -4,4 +4,4 @@ pub mod registry;
 pub use logisim_core::Value;
 pub use registry::{Library, PartDesc};
 
-libraries!(gates, wiring, ttl, bfh, plexers);
+libraries!(gates, wiring, ttl, bfh, plexers, io);
