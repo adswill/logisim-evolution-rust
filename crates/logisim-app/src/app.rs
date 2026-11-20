@@ -4,20 +4,21 @@
 use crate::examples;
 use crate::model::{Editor, Sel, P};
 use crate::nets::NetAnalysis;
-use crate::numfmt::{self, Base};
-use crate::paint::{self, Gfx, PartView, Theme, ThemeMode, View};
+use crate::numfmt::Base;
+use crate::paint::{self, PartView, ThemeMode, View};
+use crate::prefs::Prefs;
 use crate::sim::{wire_points, Sim};
-use eframe::egui::{self, Align2, Key, Modifiers, PointerButton, Pos2, Rect, Sense, Stroke, Vec2};
-use logisim_components::all_libraries;
-use logisim_core::{Direction, Location, OptVal, OptionKind, OptionSpec, Port, PortKind, Value};
+use crate::style;
+use eframe::egui::{self, Key, Modifiers, Pos2, Rect, Vec2};
+use logisim_core::{Direction, Location, Port, PortKind, Value};
 use logisim_format::{ComponentDef, ProjectFile, SUBCIRCUIT_LIBRARY};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const GRID: i32 = 10;
+pub(crate) const GRID: i32 = 10;
 
 #[derive(Clone, PartialEq, Debug)]
-enum Tool {
+pub(crate) enum Tool {
     Select,
     Poke,
     Wire,
@@ -25,7 +26,7 @@ enum Tool {
     Place(String, String),
 }
 
-enum Drag {
+pub(crate) enum Drag {
     None,
     Move { origin: (f32, f32) },
     Box { origin: (f32, f32) },
@@ -33,23 +34,23 @@ enum Drag {
 }
 
 /// Cached geometry of one placed part.
-struct Info {
-    name: String,
-    ports: Vec<Port>,
-    port_names: Vec<String>,
-    abs: Vec<P>,
-    error: Option<String>,
+pub(crate) struct Info {
+    pub(crate) name: String,
+    pub(crate) ports: Vec<Port>,
+    pub(crate) port_names: Vec<String>,
+    pub(crate) abs: Vec<P>,
+    pub(crate) error: Option<String>,
 }
 
-fn snap(v: f32) -> i32 {
+pub(crate) fn snap(v: f32) -> i32 {
     ((v / GRID as f32).round() as i32) * GRID
 }
 
-fn loc(p: P) -> Location {
+pub(crate) fn loc(p: P) -> Location {
     Location::new(p.0, p.1)
 }
 
-fn make_info(project: &ProjectFile, def: &ComponentDef) -> Info {
+pub(crate) fn make_info(project: &ProjectFile, def: &ComponentDef) -> Info {
     let (name, ports, port_names, error) = if def.library == SUBCIRCUIT_LIBRARY {
         match project.circuit(&def.part) {
             Some(c) => {
@@ -107,42 +108,54 @@ fn make_info(project: &ProjectFile, def: &ComponentDef) -> Info {
 }
 
 pub struct App {
-    ed: Editor,
-    mode: ThemeMode,
-    views: HashMap<String, View>,
-    tool: Tool,
-    place_facing: Direction,
-    drag: Drag,
-    wire_chain: Option<P>,
-    cursor_world: Option<(f32, f32)>,
-    hover: Option<P>,
-    infos: Vec<Info>,
-    infos_key: (u64, String),
-    sim: Option<Sim>,
-    sim_key: (u64, String),
-    sim_on: bool,
-    running: bool,
-    hz: f32,
-    accum: f32,
-    base: Base,
-    attr_buf: HashMap<String, String>,
-    attr_for: Option<(String, usize, String)>,
-    attr_err: HashMap<String, String>,
-    new_circuit: String,
-    status: String,
-    show_grid: bool,
-    colour_nets: bool,
-    nets: NetAnalysis,
-    point_net: HashMap<P, usize>,
-    hover_net: Option<usize>,
-    title_sent: String,
+    pub(crate) ed: Editor,
+    pub(crate) mode: ThemeMode,
+    pub(crate) prefs: Prefs,
+    pub(crate) prefs_saved: Prefs,
+    pub(crate) style_key: Option<(ThemeMode, u32, u32)>,
+    pub(crate) views: HashMap<String, View>,
+    pub(crate) tool: Tool,
+    pub(crate) place_facing: Direction,
+    pub(crate) drag: Drag,
+    pub(crate) wire_chain: Option<P>,
+    pub(crate) cursor_world: Option<(f32, f32)>,
+    pub(crate) hover: Option<P>,
+    pub(crate) infos: Vec<Info>,
+    pub(crate) infos_key: (u64, String),
+    pub(crate) sim: Option<Sim>,
+    pub(crate) sim_key: (u64, String),
+    pub(crate) sim_on: bool,
+    pub(crate) running: bool,
+    pub(crate) hz: f32,
+    pub(crate) accum: f32,
+    pub(crate) base: Base,
+    pub(crate) attr_buf: HashMap<String, String>,
+    pub(crate) attr_for: Option<(String, usize, String)>,
+    pub(crate) attr_err: HashMap<String, String>,
+    pub(crate) new_circuit: String,
+    pub(crate) status: String,
+    pub(crate) show_grid: bool,
+    pub(crate) colour_nets: bool,
+    pub(crate) nets: NetAnalysis,
+    pub(crate) point_net: HashMap<P, usize>,
+    pub(crate) hover_net: Option<usize>,
+    pub(crate) title_sent: String,
 }
 
 impl App {
     pub fn new(ctx: &egui::Context, file: Option<PathBuf>, example: bool) -> Self {
+        let prefs = Prefs::load();
+        let mode = style::resolve(prefs.theme, ctx);
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut app = App {
             ed: Editor::new(),
-            mode: ThemeMode::Dark,
+            mode,
+            prefs_saved: prefs.clone(),
+            style_key: None,
+            show_grid: prefs.show_grid,
+            colour_nets: prefs.colour_nets,
+            hz: prefs.hz,
+            prefs,
             views: HashMap::new(),
             tool: Tool::Select,
             place_facing: Direction::East,
@@ -156,7 +169,6 @@ impl App {
             sim_key: (u64::MAX, String::new()),
             sim_on: true,
             running: false,
-            hz: 2.0,
             accum: 0.0,
             base: Base::Dec,
             attr_buf: HashMap::new(),
@@ -164,8 +176,6 @@ impl App {
             attr_err: HashMap::new(),
             new_circuit: String::new(),
             status: "Pick a part on the left, then click on the canvas to place it.".into(),
-            show_grid: true,
-            colour_nets: true,
             nets: NetAnalysis::default(),
             point_net: HashMap::new(),
             hover_net: None,
@@ -176,11 +186,11 @@ impl App {
         } else if let Some(p) = file {
             app.open_path(p);
         }
-        app.apply_theme(ctx);
+        app.refresh_style(ctx);
         app
     }
 
-    fn load_example(&mut self) {
+    pub(crate) fn load_example(&mut self) {
         if self.confirm_discard() {
             self.ed = examples::half_adder();
             self.tool = Tool::Select;
@@ -189,20 +199,37 @@ impl App {
         }
     }
 
-    fn apply_theme(&self, ctx: &egui::Context) {
-        let mut v = match self.mode {
-            ThemeMode::Dark => egui::Visuals::dark(),
-            ThemeMode::Light => egui::Visuals::light(),
-        };
-        let r = egui::CornerRadius::same(6);
-        v.widgets.noninteractive.corner_radius = r;
-        v.widgets.inactive.corner_radius = r;
-        v.widgets.hovered.corner_radius = r;
-        v.widgets.active.corner_radius = r;
-        ctx.set_visuals(v);
+    /// Re-apply the visual style when the theme or scale preferences changed.
+    pub(crate) fn refresh_style(&mut self, ctx: &egui::Context) {
+        self.mode = style::resolve(self.prefs.theme, ctx);
+        let key = (
+            self.mode,
+            (self.prefs.ui_scale * 100.0) as u32,
+            (self.prefs.font_scale * 100.0) as u32,
+        );
+        if self.style_key != Some(key) {
+            style::apply(ctx, self.mode, self.prefs.ui_scale, self.prefs.font_scale);
+            self.style_key = Some(key);
+        }
     }
 
-    fn view(&self) -> View {
+    /// Mirror the UI-state fields into the preferences and save when something changed.
+    pub(crate) fn sync_prefs(&mut self) {
+        self.prefs.show_grid = self.show_grid;
+        self.prefs.colour_nets = self.colour_nets;
+        self.prefs.hz = self.hz;
+        if self.prefs != self.prefs_saved {
+            self.prefs.save();
+            self.prefs_saved = self.prefs.clone();
+        }
+    }
+
+    pub(crate) fn set_ui_scale(&mut self, s: f32) {
+        self.prefs.ui_scale = (s * 20.0).round() / 20.0;
+        self.prefs.ui_scale = self.prefs.ui_scale.clamp(0.7, 2.0);
+    }
+
+    pub(crate) fn view(&self) -> View {
         self.views.get(&self.ed.current).copied().unwrap_or(View {
             origin: Vec2::new(300.0, 120.0),
             zoom: 1.0,
@@ -211,7 +238,7 @@ impl App {
 
     // ---- files -----------------------------------------------------------------------------------
 
-    fn confirm_discard(&self) -> bool {
+    pub(crate) fn confirm_discard(&self) -> bool {
         !self.ed.dirty()
             || rfd::MessageDialog::new()
                 .set_title("Unsaved changes")
@@ -221,14 +248,14 @@ impl App {
                 == rfd::MessageDialogResult::Yes
     }
 
-    fn new_project(&mut self) {
+    pub(crate) fn new_project(&mut self) {
         if self.confirm_discard() {
             self.ed = Editor::new();
             self.status = "New project".into();
         }
     }
 
-    fn open_dialog(&mut self) {
+    pub(crate) fn open_dialog(&mut self) {
         if !self.confirm_discard() {
             return;
         }
@@ -240,7 +267,7 @@ impl App {
         }
     }
 
-    fn open_path(&mut self, p: PathBuf) {
+    pub(crate) fn open_path(&mut self, p: PathBuf) {
         let parsed = std::fs::read_to_string(&p)
             .map_err(|e| e.to_string())
             .and_then(|t| ProjectFile::parse(&t).map_err(|e| e.to_string()));
@@ -260,7 +287,7 @@ impl App {
         }
     }
 
-    fn save(&mut self, as_new: bool) {
+    pub(crate) fn save(&mut self, as_new: bool) {
         let path = match (&self.ed.path, as_new) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
@@ -290,7 +317,7 @@ impl App {
 
     // ---- caches and simulation --------------------------------------------------------------------
 
-    fn refresh_caches(&mut self) {
+    pub(crate) fn refresh_caches(&mut self) {
         let key = (self.ed.version, self.ed.current.clone());
         if self.infos_key != key {
             self.infos = self
@@ -333,7 +360,7 @@ impl App {
         }
     }
 
-    fn step_sim(&mut self, dt: f32) {
+    pub(crate) fn step_sim(&mut self, dt: f32) {
         if !(self.running && self.sim_on) {
             return;
         }
@@ -347,17 +374,17 @@ impl App {
         }
     }
 
-    fn reset_sim(&mut self) {
+    pub(crate) fn reset_sim(&mut self) {
         self.sim_key = (u64::MAX, String::new());
         self.accum = 0.0;
     }
 
-    fn is_input_pin(&self, i: usize) -> bool {
+    pub(crate) fn is_input_pin(&self, i: usize) -> bool {
         let d = &self.ed.circuit().components[i];
         d.library == "Wiring" && d.part == "Pin" && d.options.boolean("output") != Ok(Some(true))
     }
 
-    fn poke(&mut self, i: usize) {
+    pub(crate) fn poke(&mut self, i: usize) {
         let def = self.ed.circuit().components[i].clone();
         if def.library != "Wiring"
             || def.part != "Pin"
@@ -391,7 +418,7 @@ impl App {
 
     // ---- geometry helpers -------------------------------------------------------------------------
 
-    fn part_view<'a>(
+    pub(crate) fn part_view<'a>(
         &'a self,
         i: usize,
         selected: bool,
@@ -408,7 +435,7 @@ impl App {
         }
     }
 
-    fn port_vals(&self, i: usize) -> Vec<Option<Value>> {
+    pub(crate) fn port_vals(&self, i: usize) -> Vec<Option<Value>> {
         let Some(sim) = &self.sim else { return vec![] };
         self.infos[i]
             .abs
@@ -417,7 +444,7 @@ impl App {
             .collect()
     }
 
-    fn hit_part(&self, w: (f32, f32)) -> Option<usize> {
+    pub(crate) fn hit_part(&self, w: (f32, f32)) -> Option<usize> {
         let pos = Pos2::new(w.0, w.1);
         (0..self.infos.len()).rev().find(|&i| {
             let v = self.part_view(i, false, &[]);
@@ -425,7 +452,7 @@ impl App {
         })
     }
 
-    fn hit_wire(&self, w: (f32, f32)) -> Option<usize> {
+    pub(crate) fn hit_wire(&self, w: (f32, f32)) -> Option<usize> {
         let pos = Pos2::new(w.0, w.1);
         self.ed
             .circuit()
@@ -445,13 +472,13 @@ impl App {
             })
     }
 
-    fn hit_any(&self, w: (f32, f32)) -> Option<Sel> {
+    pub(crate) fn hit_any(&self, w: (f32, f32)) -> Option<Sel> {
         self.hit_part(w)
             .map(Sel::Comp)
             .or_else(|| self.hit_wire(w).map(Sel::Wire))
     }
 
-    fn select_in(&mut self, r: Rect, additive: bool) {
+    pub(crate) fn select_in(&mut self, r: Rect, additive: bool) {
         let mut sel = if additive {
             self.ed.selection.clone()
         } else {
@@ -476,528 +503,14 @@ impl App {
     }
 
     /// Grid offset of the selection while it is being dragged.
-    fn move_offset(&self) -> (i32, i32) {
+    pub(crate) fn move_offset(&self) -> (i32, i32) {
         match (&self.drag, self.cursor_world) {
             (Drag::Move { origin }, Some(c)) => (snap(c.0 - origin.0), snap(c.1 - origin.1)),
             _ => (0, 0),
         }
     }
 
-    // ---- canvas ------------------------------------------------------------------------------------
-
-    fn canvas(&mut self, ui: &mut egui::Ui) {
-        let th = Theme::new(self.mode);
-        let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
-        let rect = resp.rect;
-        let painter = painter.with_clip_rect(rect);
-        painter.rect_filled(rect, 0.0, th.bg);
-
-        let mut view = self.view();
-        if resp.dragged_by(PointerButton::Secondary) || resp.dragged_by(PointerButton::Middle) {
-            view.origin += resp.drag_delta();
-        }
-        if resp.hovered() {
-            let (scroll, pinch, hover) = ui.input(|i| {
-                (
-                    i.smooth_scroll_delta.y,
-                    i.zoom_delta(),
-                    i.pointer.hover_pos(),
-                )
-            });
-            let factor = (scroll * 0.0025).exp() * pinch;
-            if let (true, Some(h)) = ((factor - 1.0).abs() > 1e-4, hover) {
-                let (wx, wy) = view.to_world(h);
-                view.zoom = (view.zoom * factor).clamp(0.25, 6.0);
-                view.origin = Vec2::new(h.x - wx * view.zoom, h.y - wy * view.zoom);
-            }
-        }
-        self.views.insert(self.ed.current.clone(), view);
-
-        self.cursor_world = resp.hover_pos().map(|p| view.to_world(p));
-        self.hover = self.cursor_world.map(|(x, y)| (snap(x), snap(y)));
-        self.hover_net = self
-            .cursor_world
-            .filter(|w| self.hit_part(*w).is_none())
-            .and_then(|w| self.hit_wire(w))
-            .and_then(|wi| self.nets.wire_net.get(wi).copied());
-        let press = ui
-            .input(|i| i.pointer.press_origin())
-            .map(|p| view.to_world(p));
-
-        self.draw_grid(&painter, rect, view, &th);
-        self.draw_wires(&painter, view, &th);
-        self.draw_parts(&painter, view, &th);
-
-        match self.tool.clone() {
-            Tool::Select => self.select_tool(&resp, &painter, view, &th, press, ui),
-            Tool::Poke => {
-                if resp.clicked_by(PointerButton::Primary) {
-                    if let Some(i) = self.cursor_world.and_then(|w| self.hit_part(w)) {
-                        self.poke(i);
-                    }
-                }
-            }
-            Tool::Wire => self.wire_tool(&resp, &painter, view, &th, press),
-            Tool::Place(lib, part) => self.place_tool(&resp, &painter, view, &th, &lib, &part),
-        }
-        if resp.clicked_by(PointerButton::Secondary) {
-            self.tool = Tool::Select;
-            self.wire_chain = None;
-        }
-        self.draw_net_tooltip(&painter, &th, resp.hover_pos());
-        if let Some((x, y)) = self.hover {
-            if self.infos.iter().any(|i| i.abs.contains(&(x, y))) {
-                painter.circle_stroke(
-                    view.to_screen(x as f32, y as f32),
-                    7.0,
-                    Stroke::new(1.5, th.select),
-                );
-            }
-        }
-    }
-
-    fn select_tool(
-        &mut self,
-        resp: &egui::Response,
-        painter: &egui::Painter,
-        view: View,
-        th: &Theme,
-        press: Option<(f32, f32)>,
-        ui: &egui::Ui,
-    ) {
-        let shift = ui.input(|i| i.modifiers.shift);
-        if resp.drag_started_by(PointerButton::Primary) {
-            if let Some(w) = press {
-                match self.hit_any(w) {
-                    Some(h) => {
-                        if !self.ed.selection.contains(&h) {
-                            self.ed.selection = vec![h];
-                        }
-                        self.drag = Drag::Move { origin: w };
-                    }
-                    None => {
-                        if !shift {
-                            self.ed.selection.clear();
-                        }
-                        self.drag = Drag::Box { origin: w };
-                    }
-                }
-            }
-        }
-        if let Drag::Box { origin } = &self.drag {
-            if let Some(c) = self.cursor_world {
-                let r = Rect::from_two_pos(
-                    view.to_screen(origin.0, origin.1),
-                    view.to_screen(c.0, c.1),
-                );
-                painter.rect_stroke(
-                    r,
-                    2.0,
-                    Stroke::new(1.0, th.select),
-                    egui::StrokeKind::Middle,
-                );
-                painter.rect_filled(r, 2.0, th.select.gamma_multiply(0.12));
-            }
-        }
-        if resp.drag_stopped_by(PointerButton::Primary) {
-            match std::mem::replace(&mut self.drag, Drag::None) {
-                Drag::Move { .. } => {
-                    let (dx, dy) = {
-                        // the offset was computed from the last cursor position
-                        let c = self.cursor_world;
-                        let o = press.unwrap_or((0.0, 0.0));
-                        c.map_or((0, 0), |c| (snap(c.0 - o.0), snap(c.1 - o.1)))
-                    };
-                    self.ed.move_selection(dx, dy);
-                }
-                Drag::Box { origin } => {
-                    if let Some(c) = self.cursor_world {
-                        self.select_in(
-                            Rect::from_two_pos(Pos2::new(origin.0, origin.1), Pos2::new(c.0, c.1)),
-                            shift,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-        if resp.clicked_by(PointerButton::Primary) {
-            match self.cursor_world.and_then(|w| self.hit_any(w)) {
-                Some(h) if shift => {
-                    if let Some(pos) = self.ed.selection.iter().position(|s| *s == h) {
-                        self.ed.selection.remove(pos);
-                    } else {
-                        self.ed.selection.push(h);
-                    }
-                }
-                Some(h) => {
-                    // clicking an input Pin while simulating flips it (no tool switch needed)
-                    if let Sel::Comp(i) = h {
-                        if self.sim_on && self.is_input_pin(i) {
-                            self.poke(i);
-                        }
-                    }
-                    self.ed.selection = vec![h];
-                }
-                None => self.ed.selection.clear(),
-            }
-        }
-        if resp.double_clicked() {
-            if let Some(i) = self.cursor_world.and_then(|w| self.hit_part(w)) {
-                let def = &self.ed.circuit().components[i];
-                if def.library == SUBCIRCUIT_LIBRARY {
-                    let name = def.part.clone();
-                    self.ed.open_circuit(&name);
-                    self.status = format!("Opened circuit '{name}'");
-                }
-            }
-        }
-    }
-
-    fn wire_tool(
-        &mut self,
-        resp: &egui::Response,
-        painter: &egui::Painter,
-        view: View,
-        th: &Theme,
-        press: Option<(f32, f32)>,
-    ) {
-        if resp.drag_started_by(PointerButton::Primary) {
-            if let Some(w) = press {
-                self.drag = Drag::Wire {
-                    start: (snap(w.0), snap(w.1)),
-                };
-                self.wire_chain = None;
-            }
-        }
-        let start = match self.drag {
-            Drag::Wire { start } => Some(start),
-            _ => self.wire_chain,
-        };
-        if let (Some(s), Some(h)) = (start, self.hover) {
-            let corner = (h.0, s.1);
-            let pts = [s, corner, h].map(|p| view.to_screen(p.0 as f32, p.1 as f32));
-            painter.line_segment([pts[0], pts[1]], Stroke::new(2.0, th.select));
-            painter.line_segment([pts[1], pts[2]], Stroke::new(2.0, th.select));
-        }
-        if resp.drag_stopped_by(PointerButton::Primary) {
-            if let (Drag::Wire { start }, Some(h)) =
-                (std::mem::replace(&mut self.drag, Drag::None), self.hover)
-            {
-                self.ed.add_wire_path(start, h);
-            }
-        }
-        if resp.double_clicked() {
-            self.wire_chain = None;
-        } else if resp.clicked_by(PointerButton::Primary) {
-            if let Some(h) = self.hover {
-                if let Some(s) = self.wire_chain {
-                    self.ed.add_wire_path(s, h);
-                }
-                self.wire_chain = Some(h);
-            }
-        }
-    }
-
-    fn place_tool(
-        &mut self,
-        resp: &egui::Response,
-        painter: &egui::Painter,
-        view: View,
-        th: &Theme,
-        lib: &str,
-        part: &str,
-    ) {
-        let Some((x, y)) = self.hover else { return };
-        let made = if lib == SUBCIRCUIT_LIBRARY {
-            self.ed.subcircuit_def(part, (x, y))
-        } else {
-            ComponentDef::new(lib, part, x, y).map_err(|e| e.to_string())
-        };
-        let mut def = match made {
-            Ok(d) => d,
-            Err(e) => {
-                self.status = e;
-                self.tool = Tool::Select;
-                return;
-            }
-        };
-        def.facing = self.place_facing;
-        let info = make_info(&self.ed.project, &def);
-        let vals: Vec<Option<Value>> = vec![];
-        let v = PartView {
-            def: &def,
-            name: &info.name,
-            ports: &info.ports,
-            port_vals: &vals,
-            selected: false,
-            port_names: &info.port_names,
-        };
-        let g = Gfx {
-            painter,
-            view,
-            theme: th,
-            at: def.at,
-            facing: def.facing,
-            alpha: 0.55,
-        };
-        paint::paint_part(&g, &v);
-        if resp.clicked_by(PointerButton::Primary) {
-            self.ed.place(def);
-        }
-    }
-
-    fn draw_grid(&self, painter: &egui::Painter, rect: Rect, view: View, th: &Theme) {
-        if !self.show_grid {
-            return;
-        }
-        let step = GRID as f32 * view.zoom;
-        if step >= 7.0 {
-            let (x0, y0) = view.to_world(rect.min);
-            let (x1, y1) = view.to_world(rect.max);
-            let (gx0, gy0) = (
-                (x0 / GRID as f32).floor() as i32,
-                (y0 / GRID as f32).floor() as i32,
-            );
-            let (gx1, gy1) = (
-                (x1 / GRID as f32).ceil() as i32,
-                (y1 / GRID as f32).ceil() as i32,
-            );
-            for gx in gx0..=gx1 {
-                for gy in gy0..=gy1 {
-                    let major = gx % 5 == 0 && gy % 5 == 0;
-                    let c = if major { th.grid_major } else { th.grid };
-                    painter.circle_filled(
-                        view.to_screen((gx * GRID) as f32, (gy * GRID) as f32),
-                        if major { 1.6 } else { 1.0 },
-                        c,
-                    );
-                }
-            }
-        } else {
-            let big = 50.0 * view.zoom;
-            let mut x = rect.min.x + (view.origin.x - rect.min.x).rem_euclid(big);
-            while x < rect.max.x {
-                painter.vline(x, rect.y_range(), Stroke::new(1.0, th.grid));
-                x += big;
-            }
-            let mut y = rect.min.y + (view.origin.y - rect.min.y).rem_euclid(big);
-            while y < rect.max.y {
-                painter.hline(rect.x_range(), y, Stroke::new(1.0, th.grid));
-                y += big;
-            }
-        }
-    }
-
-    /// Value of the net a wire belongs to (None when the simulation is off).
-    fn wire_value(&self, i: usize) -> Option<Value> {
-        let w = self.ed.circuit().wires[i];
-        self.sim.as_ref().and_then(|s| s.value_at(loc(w.a)))
-    }
-
-    fn draw_wires(&self, painter: &egui::Painter, view: View, th: &Theme) {
-        let c = self.ed.circuit();
-        let (dx, dy) = self.move_offset();
-        let screen = |p: P, o: (i32, i32)| view.to_screen((p.0 + o.0) as f32, (p.1 + o.1) as f32);
-        // halo behind every wire of the hovered net
-        if let Some(n) = self.hover_net.and_then(|n| self.nets.nets.get(n)) {
-            for &wi in &n.wires {
-                let w = c.wires[wi];
-                painter.line_segment(
-                    [screen(w.a, (0, 0)), screen(w.b, (0, 0))],
-                    Stroke::new((9.0 * view.zoom).max(6.0), th.select.gamma_multiply(0.28)),
-                );
-            }
-        }
-        for (i, w) in c.wires.iter().enumerate() {
-            let selected = self.ed.selection.contains(&Sel::Wire(i));
-            let val = self.wire_value(i);
-            let off = if selected { (dx, dy) } else { (0, 0) };
-            let (a, b) = (screen(w.a, off), screen(w.b, off));
-            let hue = self
-                .nets
-                .wire_net
-                .get(i)
-                .and_then(|n| self.nets.nets.get(*n))
-                .map(|n| n.hue);
-            let (color, thick, dashed) = if selected {
-                (th.select, 2.5, false)
-            } else if let (true, Some(h)) = (self.colour_nets, hue) {
-                let base = th.net_color(h, th.dark);
-                match val {
-                    None => (base, 2.5, false),
-                    Some(v) if v.is_error() => (th.v_err, 3.5, false),
-                    Some(v) if v.width().get() > 1 && v.is_unknown() => (th.dim, 4.0, true),
-                    Some(v) if v.width().get() > 1 => (base, 4.5, false),
-                    Some(v) if v == Value::TRUE => (base, 3.4, false),
-                    Some(v) if v == Value::FALSE => (base.gamma_multiply(0.45), 2.0, false),
-                    Some(_) => (th.dim, 2.2, true),
-                }
-            } else {
-                let thick = if val.is_some_and(|v| v.width().get() > 1) {
-                    3.5
-                } else {
-                    2.0
-                };
-                (th.value_color(val), thick, false)
-            };
-            let stroke = Stroke::new((thick * view.zoom).max(1.5), color);
-            if dashed {
-                painter.extend(egui::Shape::dashed_line(
-                    &[a, b],
-                    stroke,
-                    7.0 * view.zoom.max(0.6),
-                    5.0 * view.zoom.max(0.6),
-                ));
-            } else {
-                painter.line_segment([a, b], stroke);
-            }
-        }
-        // one label per net: bus width, or a warning for errors (on its longest wire)
-        if self.colour_nets {
-            for n in &self.nets.nets {
-                let Some(&wi) = n.wires.iter().max_by_key(|&&i| {
-                    (c.wires[i].a.0 - c.wires[i].b.0).abs()
-                        + (c.wires[i].a.1 - c.wires[i].b.1).abs()
-                }) else {
-                    continue;
-                };
-                let Some(v) = self.wire_value(wi) else {
-                    continue;
-                };
-                let w = c.wires[wi];
-                let mid = view
-                    .to_screen((w.a.0 + w.b.0) as f32 / 2.0, (w.a.1 + w.b.1) as f32 / 2.0)
-                    + Vec2::new(0.0, -9.0 * view.zoom.max(0.7));
-                let font = egui::FontId::proportional((10.0 * view.zoom).clamp(8.0, 16.0));
-                if v.is_error() {
-                    painter.text(mid, Align2::CENTER_BOTTOM, "! error", font, th.v_err);
-                } else if v.width().get() > 1 {
-                    painter.text(
-                        mid,
-                        Align2::CENTER_BOTTOM,
-                        format!("{} bits", v.width().get()),
-                        font,
-                        th.dim,
-                    );
-                }
-            }
-        }
-        // junction dots: three or more connections meet (a T counts the through wire twice)
-        let mut points: HashMap<P, usize> = HashMap::new();
-        for w in &c.wires {
-            *points.entry(w.a).or_default() += 1;
-            *points.entry(w.b).or_default() += 1;
-        }
-        for info in &self.infos {
-            for p in &info.abs {
-                *points.entry(*p).or_default() += 1;
-            }
-        }
-        for (&p, n) in &points {
-            let through = c
-                .wires
-                .iter()
-                .filter(|w| {
-                    let (lo, hi) = (
-                        (w.a.0.min(w.b.0), w.a.1.min(w.b.1)),
-                        (w.a.0.max(w.b.0), w.a.1.max(w.b.1)),
-                    );
-                    p != w.a && p != w.b && p.0 >= lo.0 && p.0 <= hi.0 && p.1 >= lo.1 && p.1 <= hi.1
-                })
-                .count();
-            if n + 2 * through >= 3 {
-                let val = self.sim.as_ref().and_then(|s| s.value_at(loc(p)));
-                let color = match (
-                    self.colour_nets,
-                    self.point_net.get(&p).and_then(|i| self.nets.nets.get(*i)),
-                ) {
-                    (true, Some(net)) => th.net_color(net.hue, th.dark),
-                    _ => th.value_color(val),
-                };
-                painter.circle_filled(
-                    view.to_screen(p.0 as f32, p.1 as f32),
-                    (3.5 * view.zoom).max(2.5),
-                    color,
-                );
-            }
-        }
-    }
-
-    /// Small readout of the hovered net's value in decimal, hex and binary.
-    fn draw_net_tooltip(&self, painter: &egui::Painter, th: &Theme, cursor: Option<Pos2>) {
-        let (Some(n), Some(pos)) = (self.hover_net.and_then(|n| self.nets.nets.get(n)), cursor)
-        else {
-            return;
-        };
-        let mut lines = vec![];
-        match n.wires.first().and_then(|&w| self.wire_value(w)) {
-            None => lines.push("simulation is off".to_string()),
-            Some(v) => {
-                let w = v.width().get() as usize;
-                lines.push(format!("{w}-bit net"));
-                match v.to_u64() {
-                    Some(x) if w == 1 => lines.push(format!("value {x}")),
-                    Some(x) => {
-                        lines.push(format!("dec  {x}"));
-                        lines.push(format!("hex  0x{x:X}"));
-                        lines.push(format!("bin  0b{x:0w$b}"));
-                    }
-                    None => lines.push(format!("bits {}", v.to_binary_string())),
-                }
-            }
-        }
-        let font = egui::FontId::monospace(12.0);
-        let text = lines.join("\n");
-        let galley = painter.layout_no_wrap(text, font, th.text);
-        let rect = Rect::from_min_size(
-            pos + Vec2::new(14.0, 14.0),
-            galley.size() + Vec2::splat(12.0),
-        );
-        painter.rect_filled(rect, 6.0, th.fill);
-        painter.rect_stroke(
-            rect,
-            6.0,
-            Stroke::new(1.0, th.select),
-            egui::StrokeKind::Inside,
-        );
-        painter.galley(rect.min + Vec2::splat(6.0), galley, th.text);
-    }
-
-    fn draw_parts(&self, painter: &egui::Painter, view: View, th: &Theme) {
-        let (dx, dy) = self.move_offset();
-        for (i, def) in self.ed.circuit().components.iter().enumerate() {
-            let selected = self.ed.selection.contains(&Sel::Comp(i));
-            let vals = self.port_vals(i);
-            let v = self.part_view(i, selected, &vals);
-            let at = if selected {
-                (def.at.0 + dx, def.at.1 + dy)
-            } else {
-                def.at
-            };
-            let g = Gfx {
-                painter,
-                view,
-                theme: th,
-                at,
-                facing: def.facing,
-                alpha: 1.0,
-            };
-            paint::paint_part(&g, &v);
-            if let Some(err) = &self.infos[i].error {
-                let pos = view.to_screen(at.0 as f32, at.1 as f32 + 14.0);
-                painter.text(
-                    pos,
-                    Align2::CENTER_TOP,
-                    format!("Error: {err}"),
-                    egui::FontId::proportional(10.0),
-                    th.v_err,
-                );
-            }
-        }
-    }
-
-    fn paste_clip(&mut self) {
+    pub(crate) fn paste_clip(&mut self) {
         let skipped = self.ed.paste(self.hover);
         if skipped > 0 {
             self.status =
@@ -1005,7 +518,7 @@ impl App {
         }
     }
 
-    fn duplicate(&mut self) {
+    pub(crate) fn duplicate(&mut self) {
         let skipped = self.ed.duplicate();
         if skipped > 0 {
             self.status = format!(
@@ -1016,7 +529,7 @@ impl App {
 
     // ---- keyboard ----------------------------------------------------------------------------------
 
-    fn keys(&mut self, ctx: &egui::Context) {
+    pub(crate) fn keys(&mut self, ctx: &egui::Context) {
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let (copy, cut, paste, dup) = ctx.input_mut(|i| {
             let ev = |f: fn(&egui::Event) -> bool| i.events.iter().any(f);
@@ -1053,6 +566,19 @@ impl App {
                 i.consume_key(Modifiers::COMMAND, Key::A),
             )
         });
+        let (zin, zout) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::COMMAND, Key::Equals)
+                    || i.consume_key(Modifiers::COMMAND, Key::Plus),
+                i.consume_key(Modifiers::COMMAND, Key::Minus),
+            )
+        });
+        if zin {
+            self.set_ui_scale(self.prefs.ui_scale + 0.1);
+        }
+        if zout {
+            self.set_ui_scale(self.prefs.ui_scale - 0.1);
+        }
         if redo {
             self.ed.redo();
         }
@@ -1100,494 +626,17 @@ impl App {
             self.ed.selection.clear();
         }
     }
-
-    // ---- panels --------------------------------------------------------------------------------------
-
-    fn menu(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("New").clicked() {
-                    self.new_project();
-                    ui.close();
-                }
-                if ui.button("Open…").clicked() {
-                    self.open_dialog();
-                    ui.close();
-                }
-                if ui.button("Save").clicked() {
-                    self.save(false);
-                    ui.close();
-                }
-                if ui.button("Save As…").clicked() {
-                    self.save(true);
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Open example: Half adder").clicked() {
-                    self.load_example();
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Quit").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-            ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(self.ed.can_undo(), egui::Button::new("Undo")).clicked() {
-                    self.ed.undo();
-                    ui.close();
-                }
-                if ui.add_enabled(self.ed.can_redo(), egui::Button::new("Redo")).clicked() {
-                    self.ed.redo();
-                    ui.close();
-                }
-                ui.separator();
-                let has = !self.ed.selection.is_empty();
-                if ui.add_enabled(has, egui::Button::new("Cut")).clicked() {
-                    self.ed.cut();
-                    ui.close();
-                }
-                if ui.add_enabled(has, egui::Button::new("Copy")).clicked() {
-                    self.ed.copy();
-                    ui.close();
-                }
-                if ui.add_enabled(self.ed.has_clipboard(), egui::Button::new("Paste")).clicked() {
-                    self.paste_clip();
-                    ui.close();
-                }
-                if ui.add_enabled(has, egui::Button::new("Duplicate")).clicked() {
-                    self.duplicate();
-                    ui.close();
-                }
-                ui.separator();
-                if ui.add_enabled(has, egui::Button::new("Delete")).clicked() {
-                    self.ed.delete_selection();
-                    ui.close();
-                }
-                if ui.add_enabled(has, egui::Button::new("Rotate (R)")).clicked() {
-                    self.ed.rotate_selection();
-                    ui.close();
-                }
-            });
-            ui.menu_button("View", |ui| {
-                if ui.radio_value(&mut self.mode, ThemeMode::Dark, "Dark theme").clicked()
-                    | ui.radio_value(&mut self.mode, ThemeMode::Light, "Light theme").clicked()
-                {
-                    self.apply_theme(ui.ctx());
-                }
-                ui.checkbox(&mut self.show_grid, "Show grid");
-                ui.checkbox(&mut self.colour_nets, "Colour nets");
-                if ui.button("Reset view").clicked() {
-                    self.views.remove(&self.ed.current);
-                    ui.close();
-                }
-            });
-            ui.menu_button("Simulate", |ui| {
-                ui.checkbox(&mut self.sim_on, "Simulation enabled");
-                let label = if self.running { "Pause clock" } else { "Run clock" };
-                if ui.button(label).clicked() {
-                    self.running = !self.running;
-                    ui.close();
-                }
-                if ui.button("Step one tick").clicked() {
-                    if let Some(s) = self.sim.as_mut() {
-                        s.tick();
-                    }
-                    ui.close();
-                }
-                if ui.button("Reset simulation").clicked() {
-                    self.reset_sim();
-                    ui.close();
-                }
-            });
-            ui.menu_button("Help", |ui| {
-                if ui.button("About").clicked() {
-                    self.status = "rcirc: a beginner-friendly Rust port of Logisim Evolution (GPL-3.0-or-later).".into();
-                    ui.close();
-                }
-            });
-        });
-    }
-
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            let t = self.tool.clone();
-            if ui
-                .selectable_label(t == Tool::Select, "Select")
-                .on_hover_text("Click or box-select, drag to move (wires follow). Clicking an input Pin flips it. Esc")
-                .clicked()
-            {
-                self.tool = Tool::Select;
-            }
-            if ui
-                .selectable_label(t == Tool::Poke, "Poke")
-                .on_hover_text("Click an input Pin to flip it")
-                .clicked()
-            {
-                self.tool = Tool::Poke;
-            }
-            if ui
-                .selectable_label(t == Tool::Wire, "Wire")
-                .on_hover_text("Drag to draw wires; click, click for chains")
-                .clicked()
-            {
-                self.tool = Tool::Wire;
-                self.wire_chain = None;
-            }
-            if let Tool::Place(_, part) = &t {
-                ui.label(format!("Placing: {part} (R rotates, right-click stops)"));
-            }
-            ui.separator();
-            ui.checkbox(&mut self.sim_on, "Simulate");
-            let run = if self.running { "Pause" } else { "Run" };
-            if ui
-                .button(run)
-                .on_hover_text("Run the clock continuously")
-                .clicked()
-            {
-                self.running = !self.running;
-            }
-            if ui
-                .button("Step")
-                .on_hover_text("Advance the clock by one tick")
-                .clicked()
-            {
-                if let Some(s) = self.sim.as_mut() {
-                    s.tick();
-                }
-            }
-            if ui
-                .button("Reset")
-                .on_hover_text("Restart the simulation")
-                .clicked()
-            {
-                self.reset_sim();
-            }
-            ui.add(
-                egui::DragValue::new(&mut self.hz)
-                    .range(0.1..=60.0)
-                    .speed(0.1)
-                    .suffix(" ticks/s"),
-            );
-            if let Some(s) = &self.sim {
-                ui.label(format!("tick {}", s.ticks));
-                if s.oscillating() {
-                    ui.colored_label(egui::Color32::from_rgb(240, 80, 80), "Oscillating circuit!");
-                }
-            }
-        });
-    }
-
-    fn toolbox(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Parts");
-            for lib in all_libraries() {
-                egui::CollapsingHeader::new(lib.name)
-                    .default_open(lib.name == "Gates" || lib.name == "Wiring")
-                    .show(ui, |ui| {
-                        for p in &lib.parts {
-                            let selected = self.tool == Tool::Place(lib.name.into(), p.name.into());
-                            if ui.selectable_label(selected, p.name).clicked() {
-                                self.tool = Tool::Place(lib.name.into(), p.name.into());
-                            }
-                        }
-                    });
-            }
-            ui.separator();
-            ui.heading("Circuits");
-            let names: Vec<String> = self
-                .ed
-                .project
-                .circuits
-                .iter()
-                .map(|c| c.name.clone())
-                .collect();
-            for name in names {
-                ui.horizontal(|ui| {
-                    let main = if name == self.ed.project.main {
-                        " (main)"
-                    } else {
-                        ""
-                    };
-                    if ui
-                        .selectable_label(name == self.ed.current, format!("{name}{main}"))
-                        .clicked()
-                    {
-                        self.ed.open_circuit(&name);
-                    }
-                    if name != self.ed.current
-                        && ui
-                            .small_button("Place")
-                            .on_hover_text("Place this circuit as a part in the open circuit")
-                            .clicked()
-                    {
-                        self.tool = Tool::Place(SUBCIRCUIT_LIBRARY.into(), name.clone());
-                    }
-                    if ui
-                        .small_button("Main")
-                        .on_hover_text("Make this the main circuit")
-                        .clicked()
-                    {
-                        self.ed.set_main(&name);
-                    }
-                    if ui
-                        .small_button("Del")
-                        .on_hover_text("Delete this circuit")
-                        .clicked()
-                    {
-                        if let Err(e) = self.ed.delete_circuit(&name) {
-                            self.status = e;
-                        }
-                    }
-                });
-            }
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_circuit)
-                        .hint_text("new circuit name")
-                        .desired_width(110.0),
-                );
-                if ui.button("Add").clicked() {
-                    let n = self.ed.add_circuit(&self.new_circuit.clone());
-                    self.ed.open_circuit(&n);
-                    self.new_circuit.clear();
-                }
-            });
-        });
-    }
-
-    /// Option widgets for the selected part.
-    fn attributes(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Attributes");
-        ui.horizontal(|ui| {
-            ui.label("Number format:");
-            for b in Base::ALL {
-                if ui.selectable_label(self.base == b, b.label()).clicked() {
-                    self.base = b;
-                    self.attr_buf.clear();
-                }
-            }
-        });
-        ui.separator();
-        let [Sel::Comp(i)] = self.ed.selection[..] else {
-            self.circuit_panel(ui);
-            return;
-        };
-        let def = self.ed.circuit().components[i].clone();
-        let sig = format!("{:?}{:?}", def.options, def.facing);
-        let key = (self.ed.current.clone(), i, sig);
-        if self.attr_for.as_ref() != Some(&key) {
-            self.attr_buf.clear();
-            self.attr_err.clear();
-            self.attr_for = Some(key);
-        }
-        ui.strong(&self.infos[i].name);
-        ui.label(format!("{}  at ({}, {})", def.library, def.at.0, def.at.1));
-        let mut facing = def.facing;
-        egui::ComboBox::from_label("Facing")
-            .selected_text(format!("{facing:?}"))
-            .show_ui(ui, |ui| {
-                for d in [
-                    Direction::East,
-                    Direction::North,
-                    Direction::West,
-                    Direction::South,
-                ] {
-                    ui.selectable_value(&mut facing, d, format!("{d:?}"));
-                }
-            });
-        if facing != def.facing {
-            let mut d = def.clone();
-            d.facing = facing;
-            self.ed.replace_component(i, d);
-            return;
-        }
-        ui.separator();
-        for spec in self.specs_for(&def) {
-            self.option_widget(ui, i, &def, &spec);
-            ui.add_space(4.0);
-        }
-        if def.library == SUBCIRCUIT_LIBRARY {
-            ui.label("Double-click the part to open this circuit.");
-        }
-    }
-
-    fn specs_for(&self, def: &ComponentDef) -> Vec<OptionSpec> {
-        if def.library != SUBCIRCUIT_LIBRARY {
-            if let Ok(c) = def.build() {
-                let specs = c.option_specs();
-                if !specs.is_empty() {
-                    return specs;
-                }
-            }
-        }
-        // no metadata: infer widgets from the current values
-        def.options
-            .0
-            .iter()
-            .map(|(k, v)| {
-                let key: &'static str = Box::leak(k.clone().into_boxed_str());
-                match v {
-                    OptVal::Bool(b) => OptionSpec::boolean(key, key, *b),
-                    OptVal::Int(n) => OptionSpec::int(key, key, i64::MIN, i64::MAX, *n),
-                    OptVal::Str(s) => OptionSpec::string(key, key, s),
-                }
-            })
-            .collect()
-    }
-
-    fn option_widget(
-        &mut self,
-        ui: &mut egui::Ui,
-        idx: usize,
-        def: &ComponentDef,
-        spec: &OptionSpec,
-    ) {
-        let cur = def
-            .options
-            .0
-            .get(spec.key)
-            .cloned()
-            .unwrap_or_else(|| spec.default.clone());
-        let bufkey = format!("{idx}:{}", spec.key);
-        match (&spec.kind, &cur) {
-            (OptionKind::Bool, OptVal::Bool(b)) => {
-                let mut v = *b;
-                if ui.checkbox(&mut v, spec.label).changed() {
-                    self.apply(idx, spec.key, OptVal::Bool(v));
-                }
-            }
-            (OptionKind::Choice { names }, OptVal::Str(s)) => {
-                let mut sel = s.clone();
-                egui::ComboBox::from_label(spec.label)
-                    .selected_text(sel.clone())
-                    .show_ui(ui, |ui| {
-                        for n in names {
-                            ui.selectable_value(&mut sel, (*n).to_string(), *n);
-                        }
-                    });
-                if &sel != s {
-                    self.apply(idx, spec.key, OptVal::Str(sel));
-                }
-            }
-            (OptionKind::Int { min, max }, OptVal::Int(n)) => {
-                ui.label(spec.label);
-                let buf = self
-                    .attr_buf
-                    .entry(bufkey.clone())
-                    .or_insert_with(|| numfmt::format_int(*n, self.base));
-                let r = ui.add(egui::TextEdit::singleline(buf).desired_width(150.0));
-                let text = buf.clone();
-                let parsed = numfmt::parse_int(&text).and_then(|v| {
-                    if (*min..=*max).contains(&v) {
-                        Ok(v)
-                    } else {
-                        Err(format!(
-                            "must be between {} and {}",
-                            numfmt::format_int(*min, self.base),
-                            numfmt::format_int(*max, self.base)
-                        ))
-                    }
-                });
-                match parsed {
-                    Ok(v) => {
-                        ui.weak(format!("= {}", numfmt::other_bases(v, self.base)));
-                        if r.lost_focus() && v != *n {
-                            self.apply(idx, spec.key, OptVal::Int(v));
-                        }
-                    }
-                    Err(e) => {
-                        ui.colored_label(egui::Color32::from_rgb(240, 90, 90), e);
-                    }
-                }
-            }
-            (_, OptVal::Str(s)) => {
-                ui.label(spec.label);
-                let buf = self.attr_buf.entry(bufkey).or_insert_with(|| s.clone());
-                let r = ui.add(egui::TextEdit::singleline(buf).desired_width(150.0));
-                if r.lost_focus() && *buf != *s {
-                    let v = buf.clone();
-                    self.apply(idx, spec.key, OptVal::Str(v));
-                }
-            }
-            _ => {
-                ui.label(format!("{}: unsupported value", spec.label));
-            }
-        }
-        if let Some(e) = self.attr_err.get(spec.key) {
-            ui.colored_label(egui::Color32::from_rgb(240, 90, 90), e);
-        }
-    }
-
-    fn apply(&mut self, idx: usize, key: &str, v: OptVal) {
-        match self.ed.set_option(idx, key, v) {
-            Ok(()) => {
-                self.attr_err.remove(key);
-            }
-            Err(e) => {
-                self.attr_err.insert(key.to_string(), e.to_string());
-            }
-        }
-    }
-
-    fn circuit_panel(&mut self, ui: &mut egui::Ui) {
-        ui.strong(format!("Circuit: {}", self.ed.current));
-        ui.label(format!(
-            "{} parts, {} wires",
-            self.ed.circuit().components.len(),
-            self.ed.circuit().wires.len()
-        ));
-        ui.separator();
-        ui.label("Ports of this circuit when used as a part:");
-        let iface = self.ed.circuit().interface.clone();
-        if iface.is_empty() {
-            ui.weak("none yet. Give a Pin a label to make it a port.");
-        }
-        for p in iface {
-            let kind = if p.input { "input" } else { "output" };
-            ui.label(format!(
-                "{}  ({kind}, {} bit{})",
-                p.name,
-                p.width,
-                if p.width == 1 { "" } else { "s" }
-            ));
-        }
-        ui.separator();
-        ui.weak("Select a part to edit its attributes.");
-    }
-
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(&self.status);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("zoom {:.0}%", self.view().zoom * 100.0));
-                if let Some((x, y)) = self.hover {
-                    ui.label(format!("({x}, {y})"));
-                }
-            });
-        });
-    }
-
-    fn update_title(&mut self, ctx: &egui::Context) {
-        let star = if self.ed.dirty() { "*" } else { "" };
-        let title = format!(
-            "rcirc - {}{star} [{}]",
-            self.ed.project.metadata.name, self.ed.current
-        );
-        if title != self.title_sent {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            self.title_sent = title;
-        }
-    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.refresh_style(&ctx);
         self.keys(&ctx);
         self.step_sim(ctx.input(|i| i.stable_dt));
         self.refresh_caches();
         self.update_title(&ctx);
+        self.sync_prefs();
         if self.running {
             ctx.request_repaint();
         }

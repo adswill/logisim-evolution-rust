@@ -1,10 +1,14 @@
 mod app;
+mod canvas;
 mod examples;
 mod model;
 mod nets;
 mod numfmt;
 mod paint;
+mod panels;
+mod prefs;
 mod sim;
+mod style;
 
 use eframe::egui;
 

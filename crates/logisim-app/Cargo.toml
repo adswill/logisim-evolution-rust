@@ -11,3 +11,6 @@ logisim-core = { path = "../logisim-core" }
 logisim-components = { path = "../logisim-components" }
 logisim-format = { path = "../logisim-format" }
 rfd = "0.17"
+serde.workspace = true
+ron.workspace = true
+egui_dock.workspace = true

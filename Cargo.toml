@@ -13,3 +13,4 @@ repository = "https://github.com/adswill/logisim-evolution-rust"
 eframe = "0.37"
 serde = { version = "1", features = ["derive"] }
 ron = "0.10"
+egui_dock = { version = "0.22", features = ["serde"] }
