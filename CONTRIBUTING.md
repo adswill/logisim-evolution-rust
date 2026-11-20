@@ -10,6 +10,7 @@ The Java reference lives (untracked) in `reference/logisim-evolution`; port **se
 | `logisim-core` | `Value`/`BitWidth`, `Location`/`Direction`, `Component` trait, `Circuit` (nets + event-driven simulator) |
 | `logisim-components` | Component libraries, one module each, registered in `lib.rs` |
 | `logisim-format` | `.rcirc` file format (serde + RON) |
+| `logisim-log` | Non-GUI logging, timing-diagram data and test vectors (signal history, `LogModel`/`LogWriter`, test-vector parser/evaluator) |
 | `logisim-app` | `rcirc` egui desktop app |
 
 ## Adding a component library

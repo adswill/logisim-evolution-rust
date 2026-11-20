@@ -1,10 +1,12 @@
 //! The editor document model: pure data + commands, no UI. Everything the editor can do to a
 //! project goes through [`Command`]s so undo/redo is exact.
 
+use crate::nets::{HueMemory, NetAnalysis};
 use logisim_core::{Direction, OptVal};
 use logisim_format::{
     CircuitDef, ComponentDef, Error, InterfaceDef, ProjectFile, WireDef, SUBCIRCUIT_LIBRARY,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub type P = (i32, i32);
@@ -80,6 +82,33 @@ pub struct Editor {
     pub saved_version: u64,
     undo: Vec<(String, Command)>,
     redo: Vec<(String, Command)>,
+    clip: Option<Clip>,
+    hue_mem: HashMap<String, HueMemory>,
+    nets_cache: Option<((u64, String), NetAnalysis)>,
+}
+
+/// Copied parts and wires, in their original coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Clip {
+    pub components: Vec<ComponentDef>,
+    pub wires: Vec<WireDef>,
+}
+
+impl Clip {
+    /// Top-left corner of everything in the clip.
+    pub fn origin(&self) -> P {
+        let xs = self
+            .components
+            .iter()
+            .map(|c| c.at.0)
+            .chain(self.wires.iter().flat_map(|w| [w.a.0, w.b.0]));
+        let ys = self
+            .components
+            .iter()
+            .map(|c| c.at.1)
+            .chain(self.wires.iter().flat_map(|w| [w.a.1, w.b.1]));
+        (xs.min().unwrap_or(0), ys.min().unwrap_or(0))
+    }
 }
 
 fn empty_circuit(name: &str) -> CircuitDef {
@@ -104,6 +133,9 @@ impl Editor {
             saved_version: 0,
             undo: vec![],
             redo: vec![],
+            clip: None,
+            hue_mem: HashMap::new(),
+            nets_cache: None,
         }
     }
 
@@ -115,6 +147,22 @@ impl Editor {
             path,
             ..Editor::new()
         }
+    }
+
+    /// Nets of the open circuit with stable hues (recomputed only after a structural change).
+    pub fn nets(&mut self) -> &NetAnalysis {
+        let key = (self.version, self.current.clone());
+        if self.nets_cache.as_ref().map(|(k, _)| k) != Some(&key) {
+            let c = self.circuit().clone();
+            let ports: Vec<Vec<P>> = c.components.iter().map(|d| self.port_points(d)).collect();
+            let analysis = self
+                .hue_mem
+                .entry(self.current.clone())
+                .or_default()
+                .analyze(&c, &ports);
+            self.nets_cache = Some((key, analysis));
+        }
+        &self.nets_cache.as_ref().expect("just computed").1
     }
 
     pub fn dirty(&self) -> bool {
@@ -234,19 +282,45 @@ impl Editor {
         }
     }
 
+    /// Absolute port locations of a placed part.
+    pub fn port_points(&self, def: &ComponentDef) -> Vec<P> {
+        let offsets: Vec<P> = if def.library == SUBCIRCUIT_LIBRARY {
+            self.project
+                .circuit(&def.part)
+                .map(|c| c.interface.iter().map(|i| i.offset).collect())
+                .unwrap_or_default()
+        } else {
+            def.build()
+                .map(|c| c.ports().iter().map(|p| (p.offset.x, p.offset.y)).collect())
+                .unwrap_or_default()
+        };
+        offsets
+            .into_iter()
+            .map(|o| {
+                let r = def.facing.rotate(logisim_core::Location::new(o.0, o.1));
+                (def.at.0 + r.x, def.at.1 + r.y)
+            })
+            .collect()
+    }
+
+    /// Move the selection. Wires that are not selected but end on a moved part's port are
+    /// stretched with it ("rubber band"); a stretched wire that would turn diagonal becomes an
+    /// L of two segments. The whole thing is one undo step.
     pub fn move_selection(&mut self, dx: i32, dy: i32) {
         if (dx, dy) == (0, 0) {
             return;
         }
         let sel = self.selection.clone();
         let c = self.circuit().clone();
-        let cmds: Vec<Command> = sel
-            .iter()
-            .map(|s| match s {
+        let mut moved_ports: std::collections::HashSet<P> = Default::default();
+        let mut cmds: Vec<Command> = vec![];
+        for s in &sel {
+            match s {
                 Sel::Comp(i) => {
+                    moved_ports.extend(self.port_points(&c.components[*i]));
                     let mut def = c.components[*i].clone();
                     def.at = (def.at.0 + dx, def.at.1 + dy);
-                    Command::ReplaceComponent { idx: *i, def }
+                    cmds.push(Command::ReplaceComponent { idx: *i, def });
                 }
                 Sel::Wire(i) => {
                     let w = c.wires[*i];
@@ -254,12 +328,182 @@ impl Editor {
                         a: (w.a.0 + dx, w.a.1 + dy),
                         b: (w.b.0 + dx, w.b.1 + dy),
                     };
-                    Command::ReplaceWire { idx: *i, wire }
+                    cmds.push(Command::ReplaceWire { idx: *i, wire });
                 }
+            }
+        }
+        let mut inserts: Vec<WireDef> = vec![];
+        let mut removals: Vec<usize> = vec![];
+        for (i, w) in c.wires.iter().enumerate() {
+            if sel.contains(&Sel::Wire(i)) {
+                continue;
+            }
+            let (a_hit, b_hit) = (moved_ports.contains(&w.a), moved_ports.contains(&w.b));
+            let shifted = |p: P| (p.0 + dx, p.1 + dy);
+            match (a_hit, b_hit) {
+                (false, false) => {}
+                (true, true) => cmds.push(Command::ReplaceWire {
+                    idx: i,
+                    wire: WireDef {
+                        a: shifted(w.a),
+                        b: shifted(w.b),
+                    },
+                }),
+                _ => {
+                    let (fixed, new) = if a_hit {
+                        (w.b, shifted(w.a))
+                    } else {
+                        (w.a, shifted(w.b))
+                    };
+                    let horizontal = w.a.1 == w.b.1;
+                    let corner = if horizontal {
+                        (new.0, fixed.1)
+                    } else {
+                        (fixed.0, new.1)
+                    };
+                    let aligned = fixed.0 == new.0 || fixed.1 == new.1;
+                    let mut segs: Vec<WireDef> = if aligned {
+                        vec![WireDef { a: fixed, b: new }]
+                    } else {
+                        vec![
+                            WireDef {
+                                a: fixed,
+                                b: corner,
+                            },
+                            WireDef { a: corner, b: new },
+                        ]
+                    };
+                    segs.retain(|s| s.a != s.b);
+                    match segs.split_first() {
+                        None => removals.push(i),
+                        Some((first, rest)) => {
+                            cmds.push(Command::ReplaceWire {
+                                idx: i,
+                                wire: *first,
+                            });
+                            inserts.extend(rest.iter().copied());
+                        }
+                    }
+                }
+            }
+        }
+        let n = c.wires.len();
+        for (k, wire) in inserts.into_iter().enumerate() {
+            cmds.push(Command::InsertWire { idx: n + k, wire });
+        }
+        removals.sort_unstable_by(|a, b| b.cmp(a));
+        cmds.extend(removals.into_iter().map(|idx| Command::RemoveWire { idx }));
+        self.exec(Command::Batch(cmds));
+        // removals may shift wire indexes, so keep only the selection that is still valid
+        let (nc, nw) = (self.circuit().components.len(), self.circuit().wires.len());
+        self.selection = sel
+            .into_iter()
+            .filter(|s| match s {
+                Sel::Comp(i) => *i < nc,
+                Sel::Wire(i) => *i < nw,
             })
             .collect();
-        self.exec(Command::Batch(cmds));
-        self.selection = sel;
+    }
+
+    // ---- clipboard ---------------------------------------------------------------------------------
+
+    fn selection_clip(&self) -> Clip {
+        let c = self.circuit();
+        Clip {
+            components: self
+                .selection
+                .iter()
+                .filter_map(|s| {
+                    if let Sel::Comp(i) = s {
+                        Some(c.components[*i].clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            wires: self
+                .selection
+                .iter()
+                .filter_map(|s| {
+                    if let Sel::Wire(i) = s {
+                        Some(c.wires[*i])
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    pub fn has_clipboard(&self) -> bool {
+        self.clip.is_some()
+    }
+
+    pub fn copy(&mut self) {
+        let clip = self.selection_clip();
+        if !clip.components.is_empty() || !clip.wires.is_empty() {
+            self.clip = Some(clip);
+        }
+    }
+
+    pub fn cut(&mut self) {
+        self.copy();
+        self.delete_selection();
+    }
+
+    /// Paste the clipboard so its top-left corner lands on `at` (default: 20 right and down of
+    /// where it was copied). Returns how many subcircuit instances were skipped because they would
+    /// create a loop in this circuit.
+    pub fn paste(&mut self, at: Option<P>) -> usize {
+        match self.clip.clone() {
+            Some(clip) => self.insert_clip(&clip, at),
+            None => 0,
+        }
+    }
+
+    /// Copy + paste the selection in one step, leaving the clipboard alone.
+    pub fn duplicate(&mut self) -> usize {
+        let clip = self.selection_clip();
+        self.insert_clip(&clip, None)
+    }
+
+    fn insert_clip(&mut self, clip: &Clip, at: Option<P>) -> usize {
+        let o = clip.origin();
+        let (dx, dy) = at.map_or((20, 20), |a| (a.0 - o.0, a.1 - o.1));
+        let mut skipped = 0;
+        let mut cmds = vec![];
+        let (mut nc, mut nw) = (self.circuit().components.len(), self.circuit().wires.len());
+        let first_comp = nc;
+        for def in &clip.components {
+            if def.library == SUBCIRCUIT_LIBRARY && self.subcircuit_def(&def.part, def.at).is_err()
+            {
+                skipped += 1;
+                continue;
+            }
+            let mut d = def.clone();
+            d.at = (d.at.0 + dx, d.at.1 + dy);
+            cmds.push(Command::InsertComponent { idx: nc, def: d });
+            nc += 1;
+        }
+        let first_wire = nw;
+        for w in &clip.wires {
+            cmds.push(Command::InsertWire {
+                idx: nw,
+                wire: WireDef {
+                    a: (w.a.0 + dx, w.a.1 + dy),
+                    b: (w.b.0 + dx, w.b.1 + dy),
+                },
+            });
+            nw += 1;
+        }
+        if !cmds.is_empty() {
+            self.exec(Command::Batch(cmds));
+            self.selection = (first_comp..nc)
+                .map(Sel::Comp)
+                .chain((first_wire..nw).map(Sel::Wire))
+                .collect();
+        }
+        skipped
     }
 
     /// Rotate selected parts a quarter turn counter-clockwise.
@@ -461,6 +705,22 @@ mod tests {
     }
 
     #[test]
+    fn editor_net_hues_survive_unrelated_edits_and_undo() {
+        let mut e = Editor::new();
+        e.add_wire_path((0, 0), (100, 0));
+        e.add_wire_path((0, 10), (100, 10));
+        let h: Vec<usize> = e.nets().nets.iter().map(|n| n.hue).collect();
+        assert_ne!(h[0], h[1]);
+        e.place(gate(500, 500)); // unrelated
+        assert_eq!(e.nets().nets.iter().map(|n| n.hue).collect::<Vec<_>>(), h);
+        e.add_wire_path((700, 700), (800, 700));
+        let after = e.nets().nets.iter().map(|n| n.hue).collect::<Vec<_>>();
+        assert_eq!(&after[..2], &h[..]);
+        e.undo();
+        assert_eq!(e.nets().nets.iter().map(|n| n.hue).collect::<Vec<_>>(), h);
+    }
+
+    #[test]
     fn undo_redo_restores_exactly() {
         let mut e = Editor::new();
         let before = e.project.clone();
@@ -574,5 +834,144 @@ mod tests {
         assert!(e.delete_circuit("sub").is_err()); // still used
         assert!(e.delete_circuit("main").is_err());
         assert!(e.delete_circuit("sub2").is_ok());
+    }
+
+    // ---- rubber-banding and clipboard -----------------------------------------------------------
+
+    fn gate_with_input_wire() -> Editor {
+        let mut e = Editor::new();
+        e.place(gate(100, 100)); // inputs at (50,80) and (50,120), output (100,100)
+        e.add_wire_path((0, 80), (50, 80));
+        e.selection.clear();
+        e
+    }
+
+    #[test]
+    fn wires_follow_a_moved_part_in_one_undo_step() {
+        let mut e = gate_with_input_wire();
+        let before = e.project.clone();
+        e.selection = vec![Sel::Comp(0)];
+        e.move_selection(20, 0); // stays aligned: the wire just gets longer
+        assert_eq!(
+            e.circuit().wires,
+            vec![WireDef {
+                a: (0, 80),
+                b: (70, 80)
+            }]
+        );
+        e.undo();
+        assert_eq!(e.project, before);
+        assert!(!e.can_undo() || e.circuit().wires.len() == 1);
+    }
+
+    #[test]
+    fn stretched_wire_that_would_go_diagonal_becomes_an_l() {
+        let mut e = gate_with_input_wire();
+        let before = e.project.clone();
+        e.selection = vec![Sel::Comp(0)];
+        e.move_selection(0, 20);
+        // port now at (50,100): horizontal stub kept, vertical segment added
+        assert_eq!(
+            e.circuit().wires,
+            vec![
+                WireDef {
+                    a: (0, 80),
+                    b: (50, 80)
+                },
+                WireDef {
+                    a: (50, 80),
+                    b: (50, 100)
+                }
+            ]
+        );
+        assert_eq!(e.selection, vec![Sel::Comp(0)]);
+        e.undo();
+        assert_eq!(e.project, before);
+        e.redo();
+        assert_eq!(e.circuit().wires.len(), 2);
+    }
+
+    #[test]
+    fn wire_between_two_moved_parts_moves_whole_and_untouched_wires_stay() {
+        let mut e = Editor::new();
+        e.place(gate(100, 100));
+        e.place(gate(300, 100));
+        e.add_wire_path((100, 100), (250, 100)); // gate 0 output to gate 1 input? (250,80) is the real port
+        e.add_wire_path((500, 500), (510, 500)); // unrelated
+        e.add_wire_path((100, 100), (100, 100)); // no-op
+        e.selection = vec![Sel::Comp(0), Sel::Comp(1)];
+        e.move_selection(0, 30);
+        let w = &e.circuit().wires;
+        assert!(w.contains(&WireDef {
+            a: (500, 500),
+            b: (510, 500)
+        }));
+        // the wire touching only gate 0's output follows that port (and stays axis-aligned)
+        assert!(w.iter().all(|s| s.a.0 == s.b.0 || s.a.1 == s.b.1), "{w:?}");
+        assert!(w.iter().any(|s| s.a == (100, 130) || s.b == (100, 130)));
+    }
+
+    #[test]
+    fn wire_shrunk_to_nothing_is_removed() {
+        let mut e = Editor::new();
+        e.place(gate(100, 100));
+        e.add_wire_path((20, 80), (50, 80));
+        e.selection = vec![Sel::Comp(0)];
+        e.move_selection(-30, 0); // port lands on the wire's far end
+        assert!(e.circuit().wires.is_empty());
+        e.undo();
+        assert_eq!(e.circuit().wires.len(), 1);
+    }
+
+    #[test]
+    fn copy_paste_duplicate_and_cut() {
+        let mut e = Editor::new();
+        e.place(gate(0, 0));
+        e.add_wire_path((100, 0), (150, 0));
+        e.selection = vec![Sel::Comp(0), Sel::Wire(0)];
+        e.copy();
+        assert!(e.has_clipboard());
+        assert_eq!(e.paste(None), 0);
+        assert_eq!(e.circuit().components.len(), 2);
+        assert_eq!(e.circuit().components[1].at, (20, 20));
+        assert_eq!(
+            e.circuit().wires[1],
+            WireDef {
+                a: (120, 20),
+                b: (170, 20)
+            }
+        );
+        assert_eq!(e.selection, vec![Sel::Comp(1), Sel::Wire(1)]);
+        e.paste(Some((300, 300))); // top-left of the clip is (0,0) → lands on (300,300)
+        assert_eq!(e.circuit().components[2].at, (300, 300));
+        e.undo(); // one undo step per paste
+        assert_eq!(e.circuit().components.len(), 2);
+        // duplicate leaves the clipboard alone
+        e.selection = vec![Sel::Comp(1)];
+        let clip = e.clip.clone();
+        e.duplicate();
+        assert_eq!(e.clip, clip);
+        assert_eq!(e.circuit().components.len(), 3);
+        // cut removes and can be pasted back
+        e.selection = vec![Sel::Comp(2)];
+        e.cut();
+        assert_eq!(e.circuit().components.len(), 2);
+        e.paste(None);
+        assert_eq!(e.circuit().components.len(), 3);
+    }
+
+    #[test]
+    fn paste_skips_loops_and_empty_selection_copies_nothing() {
+        let mut e = Editor::new();
+        let sub = e.add_circuit("sub");
+        e.copy(); // nothing selected
+        assert!(!e.has_clipboard());
+        let def = e.subcircuit_def(&sub, (0, 0)).unwrap();
+        e.place(def); // main contains sub
+        e.selection = vec![Sel::Comp(0)];
+        e.copy();
+        e.open_circuit("sub");
+        assert_eq!(e.paste(None), 1); // sub inside sub would loop
+        assert!(e.circuit().components.is_empty());
     }
 }

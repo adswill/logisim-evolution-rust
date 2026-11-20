@@ -5,7 +5,12 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, Vec2};
 use logisim_core::{Direction, Port, Value};
 
+pub mod arith;
+pub mod block;
 pub mod gates;
+pub mod memory;
+pub mod plexers;
+pub mod ttl;
 pub mod wiring;
 use logisim_format::ComponentDef;
 
@@ -19,6 +24,7 @@ pub enum ThemeMode {
 
 #[derive(Clone)]
 pub struct Theme {
+    pub dark: bool,
     pub bg: Color32,
     pub grid: Color32,
     pub grid_major: Color32,
@@ -39,6 +45,7 @@ impl Theme {
     pub fn new(mode: ThemeMode) -> Theme {
         match mode {
             ThemeMode::Dark => Theme {
+                dark: true,
                 bg: Color32::from_rgb(24, 26, 31),
                 grid: Color32::from_rgb(38, 41, 48),
                 grid_major: Color32::from_rgb(50, 54, 63),
@@ -55,6 +62,7 @@ impl Theme {
                 idle: Color32::from_rgb(150, 156, 168),
             },
             ThemeMode::Light => Theme {
+                dark: false,
                 bg: Color32::from_rgb(250, 250, 252),
                 grid: Color32::from_rgb(232, 234, 240),
                 grid_major: Color32::from_rgb(214, 218, 228),
@@ -70,6 +78,34 @@ impl Theme {
                 bus: Color32::from_rgb(30, 80, 200),
                 idle: Color32::from_rgb(120, 126, 140),
             },
+        }
+    }
+
+    /// Hue of a net (index into the colourblind-friendly palette, Okabe-Ito plus Tol accents);
+    /// darkened on the light theme so every hue keeps contrast.
+    pub fn net_color(&self, hue: usize, dark: bool) -> Color32 {
+        const P: [(u8, u8, u8); 10] = [
+            (230, 159, 0),
+            (86, 180, 233),
+            (0, 158, 115),
+            (240, 228, 66),
+            (30, 130, 210),
+            (213, 94, 0),
+            (204, 121, 167),
+            (68, 170, 153),
+            (153, 153, 51),
+            (150, 120, 235),
+        ];
+        let (r, g, b) = P[hue % P.len()];
+        if dark {
+            Color32::from_rgb(r, g, b)
+        } else {
+            let k = 0.72;
+            Color32::from_rgb(
+                (r as f32 * k) as u8,
+                (g as f32 * k) as u8,
+                (b as f32 * k) as u8,
+            )
         }
     }
 
@@ -321,8 +357,14 @@ pub type LibraryPainters = fn(&str) -> Option<&'static dyn PartPainter>;
 
 /// One line per library: `("Library name", module::painter)`. Parts without a painter (or whose
 /// library is not listed) are drawn as a labelled box.
-const LIBRARIES: &[(&str, LibraryPainters)] =
-    &[("Gates", gates::painter), ("Wiring", wiring::painter)];
+const LIBRARIES: &[(&str, LibraryPainters)] = &[
+    ("Gates", gates::painter),
+    ("Wiring", wiring::painter),
+    ("TTL", ttl::painter),
+    ("Plexers", plexers::painter),
+    ("Arithmetic", arith::painter),
+    ("Memory", memory::painter),
+];
 
 pub fn painter_for(library: &str, part: &str) -> &'static dyn PartPainter {
     LIBRARIES
