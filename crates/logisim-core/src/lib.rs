@@ -7,8 +7,8 @@ pub mod subcircuit;
 pub mod value;
 
 pub use circuit::{Circuit, CompId, Wire};
-pub use component::{Component, Port, PortKind, PropagateCtx};
+pub use component::{validate_specs, Component, Port, PortKind, PropagateCtx};
 pub use geom::{Direction, Location};
-pub use option::{OptVal, OptionMap};
+pub use option::{OptVal, OptionKind, OptionMap, OptionSpec};
 pub use subcircuit::{SubPortSpec, Subcircuit};
 pub use value::{BitWidth, Value};

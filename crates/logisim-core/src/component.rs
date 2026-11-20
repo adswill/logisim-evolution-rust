@@ -1,7 +1,7 @@
 //! The component abstraction: ports plus a `propagate` function.
 
 use crate::geom::Location;
-use crate::option::OptionMap;
+use crate::option::{OptionKind, OptionMap, OptionSpec};
 use crate::value::{BitWidth, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,11 @@ pub trait Component {
     fn options(&self) -> OptionMap {
         OptionMap::new()
     }
+    /// Describes every option for the attribute panel (empty = editor infers widgets from `options()`).
+    /// If non-empty it must cover exactly the keys of `options()`; check with [`validate_specs`].
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![]
+    }
     /// Apply saved options (called on a freshly made default part, *before* `ports()`).
     /// Absent keys keep the part's default; unknown keys or bad values return `Err`.
     fn set_options(&mut self, opts: &OptionMap) -> Result<(), String> {
@@ -69,4 +74,50 @@ pub trait Component {
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx);
     /// Called on each clock tick (default: ignore).
     fn tick(&mut self, _ctx: &mut dyn PropagateCtx) {}
+}
+
+/// Test helper for library authors: checks `option_specs()` against `options()` / `set_options()`.
+/// Call it on a freshly made part. Returns a description of the first problem found.
+pub fn validate_specs(part: &mut dyn Component) -> Result<(), String> {
+    let specs = part.option_specs();
+    let opts = part.options();
+    if specs.is_empty() {
+        return if opts.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("{}: has options but no option_specs", part.name()))
+        };
+    }
+    for s in &specs {
+        if !opts.0.contains_key(s.key) {
+            return Err(format!(
+                "{}: spec '{}' is not an option of the part",
+                part.name(),
+                s.key
+            ));
+        }
+        let try_set = |part: &mut dyn Component, v: crate::option::OptVal| {
+            part.set_options(&OptionMap::new().with(s.key, v))
+                .map_err(|e| format!("{}: {e}", part.name()))
+        };
+        match &s.kind {
+            OptionKind::Choice { names } => {
+                for n in names {
+                    try_set(part, crate::option::OptVal::Str((*n).into()))?;
+                }
+            }
+            OptionKind::Int { min, max } => {
+                try_set(part, crate::option::OptVal::Int(*min))?;
+                try_set(part, crate::option::OptVal::Int(*max))?;
+            }
+            OptionKind::Bool | OptionKind::Str => {}
+        }
+        try_set(part, s.default.clone())?;
+    }
+    for k in opts.0.keys() {
+        if !specs.iter().any(|s| s.key == k) {
+            return Err(format!("{}: option '{k}' has no spec", part.name()));
+        }
+    }
+    Ok(())
 }

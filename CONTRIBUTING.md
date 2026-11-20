@@ -62,6 +62,58 @@ Rules:
 - Add a test that `options()` → `set_options()` round-trips (see `every_part_round_trips_its_options` in `wiring.rs`).
   Parts with no options need nothing (defaults are empty).
 
+### Option metadata (for the attribute panel)
+
+Besides `options()`/`set_options()`, give the editor the description of each option by overriding
+`Component::option_specs() -> Vec<OptionSpec>`:
+
+```rust
+fn option_specs(&self) -> Vec<OptionSpec> {
+    vec![
+        OptionSpec::int("width", "Data bits", 1, 64, 1),                       // key, label, min, max, default
+        OptionSpec::choice("mode", "Mode", &["odd", "one"], "odd"),           // names must match `set_options`
+        OptionSpec::boolean("negate", "Negate output", false),
+        OptionSpec::string("label", "Label", ""),
+    ]
+}
+```
+
+- Cover **exactly** the keys of `options()` (the attribute panel shows these as widgets: number fields that accept
+  decimal / `0x` hex / `0b` binary, checkboxes, drop-downs, text boxes). Empty specs = no options.
+- `Int` ranges must be what `set_options` accepts. Add the test below to your library module; it checks that
+  spec keys match `options()` and that every choice name and the min/max of every integer are accepted:
+
+```rust
+#[test]
+fn option_specs_match_options() {
+    for p in &library().parts {
+        logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{e}"));
+    }
+}
+```
+
+### Painting parts (`crates/logisim-app/src/paint/`)
+
+Each library has one module `paint/<lib>.rs` exposing `pub fn painter(part: &str) -> Option<&'static dyn PartPainter>`,
+registered with **one line** in the `LIBRARIES` table of `paint/mod.rs`. Parts without a painter (or libraries not listed)
+are drawn as a labelled box, so painters can come later. `paint/gates.rs` is the reference.
+
+```rust
+pub trait PartPainter {
+    fn paint(&self, g: &Gfx, v: &PartView);                         // draw, in east-facing local coordinates
+    fn bounds(&self, v: &PartView) -> (f32, f32, f32, f32);          // local (min x, min y, max x, max y) for hit tests
+}
+```
+
+- `Gfx` does rotation, position and zoom: `g.line(a, b, colour)`, `g.poly(&pts, closed, fill, colour)`, `g.circle`,
+  `g.rect`, `g.text(at, anchor, "txt", size, colour)` (text is never rotated), `g.bubble(at)`; colours come from `g.theme`.
+  Coordinates are Logisim pixels; the part origin (0,0) is where port 0 usually sits.
+- `PartView` gives the placed part's `def` (read options with `v.int/boolean/string(key, default)`), its `ports` (local),
+  `port_vals` (live net value per port, `None` when not simulating) and `port_color(theme, i)` for wire stubs.
+  Draw the port stubs yourself so they match the live colours; the editor adds the port dots and the selection box.
+- Keep painting pure and cheap (no allocation-heavy work per frame) and never panic on odd options.
+- Verify visually: run `cargo run -p rcirc --release -- --example`, place your part from the toolbox, rotate it with `R`.
+
 ## File format (`logisim-format`)
 
 `.rcirc` is RON: `ProjectFile { format_version, metadata, circuits, main }`. A circuit is `components`

@@ -4,7 +4,7 @@
 //! Ports are listed for the east-facing orientation; `Circuit` rotates them.
 
 use crate::registry::{Library, PartDesc};
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -84,6 +84,14 @@ impl Component for Pin {
             .with("output", self.output)
             .with("label", self.label.as_str())
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::int("value", "Value", i64::MIN, i64::MAX, 0),
+            OptionSpec::boolean("output", "Output pin (shows the value)", false),
+            OptionSpec::string("label", "Label (makes it a port of this circuit)", ""),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width", "value", "output", "label"])?;
         let cur = self.value.get();
@@ -134,7 +142,7 @@ impl Clock {
         c
     }
     fn update(&mut self) {
-        let cycle = (self.high + self.low) as i64;
+        let cycle = self.high as i64 + self.low as i64;
         let phase = self.phase.rem_euclid(cycle);
         let is_low = (self.ticks as i64 + phase) % cycle < self.low as i64;
         self.sending = if is_low { Value::FALSE } else { Value::TRUE };
@@ -151,6 +159,13 @@ impl Component for Clock {
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("high", self.high).with("low", self.low).with("phase", self.phase)
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("high", "High duration (ticks)", 1, u32::MAX as i64, 1),
+            OptionSpec::int("low", "Low duration (ticks)", 1, u32::MAX as i64, 1),
+            OptionSpec::int("phase", "Phase offset (ticks)", i64::MIN, i64::MAX, 0),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["high", "low", "phase"])?;
@@ -303,6 +318,15 @@ impl Component for Splitter {
             .with("appearance", OptionMap::name_of(o.appearance, &APPEARANCES))
             .with("bit_end", bit_end.join(","))
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("fanout", "Fan out", 1, 64, 2),
+            OptionSpec::int("width", "Bit width in", 1, 64, 2),
+            OptionSpec::int("spacing", "Spacing", 1, 8, 1),
+            OptionSpec::choice("appearance", "Appearance", &["left", "right", "center", "legacy"], "left"),
+            OptionSpec::string("bit_end", "Bit → end (comma list, 0 = none)", "1,2"),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["fanout", "width", "spacing", "appearance", "bit_end"])?;
         let fanout = m.int("fanout", 1, 64)?.map_or(self.opts.fanout, |v| v as usize);
@@ -384,6 +408,12 @@ impl Component for Tunnel {
     fn options(&self) -> OptionMap {
         OptionMap::new().with("name", self.name.as_str()).with("width", self.width.get())
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::string("name", "Tunnel name", ""),
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["name", "width"])?;
         if let Some(n) = m.string("name")? {
@@ -423,6 +453,11 @@ impl Component for PullResistor {
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("pull", OptionMap::name_of(self.pull, &PULLS))
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::choice("pull", "Pull direction", &["down", "up", "error"], "down"),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["pull"])?;
@@ -492,6 +527,12 @@ impl Component for Constant {
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get()).with("value", self.value as i64)
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::int("value", "Value", i64::MIN, i64::MAX, 1),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width", "value"])?;
         if let Some(v) = m.int("width", 1, 64)? {
@@ -526,6 +567,11 @@ impl Component for Power {
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get())
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width"])?;
         if let Some(v) = m.int("width", 1, 64)? {
@@ -556,6 +602,11 @@ impl Component for Ground {
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get())
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width"])?;
@@ -616,6 +667,13 @@ impl Component for Transistor {
             .with("width", self.width.get())
             .with("select_top_right", self.select_top_right)
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::choice("type", "Type", &["p", "n"], "p"),
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::boolean("select_top_right", "Gate on top right", false),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["type", "width", "select_top_right"])?;
         self.kind = m.choice("type", &TRANSISTOR_TYPES)?.unwrap_or(self.kind);
@@ -671,6 +729,12 @@ impl Component for TransmissionGate {
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get()).with("select_top_right", self.select_top_right)
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::boolean("select_top_right", "Gate on top right", false),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width", "select_top_right"])?;
@@ -744,6 +808,13 @@ impl Component for BitExtender {
             .with("in_width", self.in_width.get())
             .with("out_width", self.out_width.get())
             .with("kind", OptionMap::name_of(self.kind, &EXTEND_KINDS))
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("in_width", "Input bits", 1, 64, 8),
+            OptionSpec::int("out_width", "Output bits", 1, 64, 16),
+            OptionSpec::choice("kind", "Extension", &["zero", "one", "sign", "input"], "zero"),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["in_width", "out_width", "kind"])?;
@@ -1046,6 +1117,8 @@ mod tests {
         assert_eq!(levels(Clock::new(1, 1, 0)), "010101");
         assert_eq!(levels(Clock::new(2, 1, 0)), "011011");
         assert_eq!(levels(Clock::new(1, 1, 1)), "101010");
+        // huge durations must not overflow
+        let _ = levels(Clock::new(u32::MAX, u32::MAX, i64::MIN));
     }
 
     #[test]
@@ -1102,6 +1175,13 @@ mod tests {
         assert!(p.is_output());
         assert_eq!(p.options().string("label"), Ok(Some("q")));
         assert_eq!(p.ports()[0].kind, PortKind::Input);
+    }
+
+    #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{e}"));
+        }
     }
 
     #[test]
