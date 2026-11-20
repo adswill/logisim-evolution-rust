@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn registry_builds_every_part() {
         let lib = crate::memory::library();
-        assert_eq!(lib.parts.len(), 10);
+        assert_eq!(lib.parts.len(), 11);
         for p in &lib.parts {
             assert_eq!((p.make)().name(), p.name);
         }

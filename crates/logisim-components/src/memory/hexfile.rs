@@ -232,6 +232,7 @@ pub fn load_text(c: &mut MemContents, text: &str, format: Option<HexFormat>) -> 
             for &(no, line) in &body {
                 let Some((addr, toks)) = split_addressed(strip(line)) else { continue };
                 let mut a = parse_hex(addr).map_err(|e| err(no, e))?;
+                #[allow(clippy::explicit_counter_loop)]
                 for tok in toks {
                     let v = parse_hex(tok).map_err(|e| err(no, e))?;
                     word_fits(&tmp, v, tok).map_err(|e| err(no, e))?;
@@ -309,7 +310,7 @@ fn push_hex_bytes(digits: &str, out: &mut Vec<u8>) -> Result<(), String> {
     if !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(format!("`{digits}` contains characters that are not hex digits"));
     }
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return Err(format!("`{digits}` has an odd number of hex digits; bytes need two each"));
     }
     for i in (0..digits.len()).step_by(2) {

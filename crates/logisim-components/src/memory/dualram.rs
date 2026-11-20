@@ -12,7 +12,7 @@ use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PropagateCt
 use super::contents::MemContents;
 use super::mem::{DataBus, EnableMode, Layout, ReadBehavior, BUSES, ENABLES, LINES, READS};
 use super::ram::{RamOptions, RamType};
-use super::{long_value, ClockState, Trigger, MEM_DELAY, TRIGGERS};
+use super::{long_value, ClockState, MEM_DELAY, TRIGGERS};
 
 const RAM_TYPES: [(&str, RamType); 2] = [
     ("volatile", RamType::Volatile),
@@ -45,6 +45,10 @@ pub struct DualRam {
     clock: [ClockState; 2],
     current: [Option<u64>; 2],
     collision: Option<u64>,
+}
+
+fn names<T>(t: &[(&'static str, T)]) -> Vec<&'static str> {
+    t.iter().map(|(n, _)| *n).collect()
 }
 
 impl DualRam {
@@ -195,6 +199,7 @@ impl DualRam {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn byte_side(&mut self, ctx: &mut dyn PropagateCtx, side: usize, addr: u64, good: bool, error: bool, we: bool, edge: bool) {
         let old = self.current[side].map_or(0, |a| self.contents.get(a));
         let mut new = old;
@@ -270,7 +275,6 @@ impl Component for DualRam {
             )
     }
     fn option_specs(&self) -> Vec<OptionSpec> {
-        let names = |t: &[(&'static str, _)]| t.iter().map(|(n, _)| *n).collect::<Vec<_>>();
         let o = RamOptions::default();
         vec![
             OptionSpec::int("addr_bits", "Address bits", 2, 24, i64::from(o.addr_bits)),
@@ -449,9 +453,9 @@ mod tests {
         b.set(d.port(0, Pin::DataIn(0)).unwrap(), val(8, 9));
         b.set(d.port(0, Pin::WriteEnable).unwrap(), T);
         b.pulse(d.port(1, Pin::Clock).unwrap());
-        assert_eq!(d.contents().get(1), 0);
-        let mut d = d;
-        let _ = &mut d;
+        b.set(d.port(0, Pin::WriteEnable).unwrap(), F);
+        b.pulse(d.port(0, Pin::Clock).unwrap());
+        assert_eq!(b.out(d.port(0, Pin::DataOut(0)).unwrap()), val(8, 0));
     }
 
     #[test]
@@ -503,10 +507,6 @@ mod tests {
         b.set(d.port(1, Pin::LineEnable(0)).unwrap(), F);
         b.set(d.port(1, Pin::WriteEnable).unwrap(), T);
         b.pulse(d.port(1, Pin::Clock).unwrap());
-        assert_eq!(
-            (d.contents().get(0), d.contents().get(1), d.contents().get(2), d.contents().get(3)),
-            (0, 0, 0, 0)
-        );
         // contents live inside the bench component; read back through the outputs
         assert_eq!(b.out(d.port(0, Pin::DataOut(0)).unwrap()), val(8, 1));
         assert_eq!(b.out(d.port(0, Pin::DataOut(1)).unwrap()), val(8, 2));

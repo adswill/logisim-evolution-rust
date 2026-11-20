@@ -17,6 +17,7 @@ pub mod flipflop;
 pub mod hexfile;
 pub mod mem;
 pub mod random;
+pub mod dualram;
 pub mod ram;
 pub mod register;
 pub mod rom;
@@ -27,6 +28,7 @@ pub use counter::{Counter, CounterOptions, OnGoal};
 pub use hexfile::{load_binary, load_file, load_text, save_binary, save_file, save_text, Endian, HexFormat};
 pub use flipflop::{FlipFlop, FlipFlopKind, FlipFlopOptions};
 pub use mem::{DataBus, EnableMode, LineSize, ReadBehavior};
+pub use dualram::{DualRam, Pin as DualRamPin};
 pub use ram::{Ram, RamOptions, RamType};
 pub use random::{Random, RandomOptions};
 pub use register::{Register, RegisterOptions};
@@ -50,6 +52,7 @@ pub fn library() -> Library {
             }),
             part("Random", || Box::new(Random::new(RandomOptions::default()))),
             part("RAM", || Box::new(Ram::new(RamOptions::default()))),
+            part("DualRAM", || Box::new(DualRam::new(RamOptions::default()))),
             part("ROM", || Box::new(Rom::new(RomOptions::default()))),
         ],
     }
