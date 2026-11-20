@@ -49,6 +49,7 @@ pub fn half_adder() -> Editor {
         e.add_wire_path(a, b);
     }
     e.selection.clear();
+    e.mark_saved();
     e
 }
 
@@ -67,5 +68,6 @@ mod tests {
         assert_eq!(sim.value_at(sum), Some(Value::FALSE)); // 1 xor 1
         assert_eq!(sim.value_at(carry), Some(Value::TRUE)); // 1 and 1
         assert_eq!(e.circuit().interface.len(), 4);
+        assert!(!e.dirty(), "a freshly loaded example is not modified");
     }
 }
