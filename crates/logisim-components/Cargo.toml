@@ -1,0 +1,8 @@
+[package]
+name = "logisim-components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+logisim-core = { path = "../logisim-core" }
