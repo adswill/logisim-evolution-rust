@@ -39,20 +39,36 @@ fn bw(w: u8) -> BitWidth {
 /// Call `Circuit::refresh(id)` afterwards to propagate the change.
 pub type PinHandle = Rc<Cell<Value>>;
 
-/// Drives a settable value on its single output port at (0,0). Also serves as an input pin.
+/// A circuit pin. An *input* pin drives its settable value on port 0 at (0,0). An *output* pin
+/// only observes the net (port 0 is an input). A non-empty `label` makes the pin part of the
+/// circuit's interface when the circuit is used as a subcircuit.
 pub struct Pin {
     value: PinHandle,
+    output: bool,
+    label: String,
+    seen: PinHandle,
 }
 
 impl Pin {
     pub fn new(value: Value) -> Self {
-        Pin { value: Rc::new(Cell::new(value)) }
+        Pin { value: Rc::new(Cell::new(value)), output: false, label: String::new(), seen: Rc::new(Cell::new(Value::NIL)) }
+    }
+    /// An output pin of the given width.
+    pub fn output(width: u8) -> Self {
+        Pin { output: true, ..Pin::new(Value::unknown(bw(width))) }
     }
     pub fn handle(&self) -> PinHandle {
         Rc::clone(&self.value)
     }
+    /// For output pins: the value last seen on the net.
+    pub fn seen_handle(&self) -> PinHandle {
+        Rc::clone(&self.seen)
+    }
     pub fn bit(high: bool) -> Self {
         Pin::new(if high { Value::TRUE } else { Value::FALSE })
+    }
+    pub fn is_output(&self) -> bool {
+        self.output
     }
 }
 
@@ -62,21 +78,34 @@ impl Component for Pin {
     }
     fn options(&self) -> OptionMap {
         let v = self.value.get();
-        OptionMap::new().with("width", v.width().get()).with("value", v.to_u64().unwrap_or(0) as i64)
+        OptionMap::new()
+            .with("width", v.width().get())
+            .with("value", v.to_u64().unwrap_or(0) as i64)
+            .with("output", self.output)
+            .with("label", self.label.as_str())
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
-        m.reject_unknown(&["width", "value"])?;
+        m.reject_unknown(&["width", "value", "output", "label"])?;
         let cur = self.value.get();
         let width = m.int("width", 1, 64)?.map_or(cur.width(), |v| BitWidth::new(v as u8));
         let value = m.int("value", i64::MIN, i64::MAX)?.map_or(cur.to_u64().unwrap_or(0), |v| v as u64);
+        self.output = m.boolean("output")?.unwrap_or(self.output);
+        if let Some(l) = m.string("label")? {
+            self.label = l.to_string();
+        }
         self.value.set(Value::known(width, value));
         Ok(())
     }
     fn ports(&self) -> Vec<Port> {
-        vec![Port::new(0, 0, PortKind::Output, self.value.get().width())]
+        let kind = if self.output { PortKind::Input } else { PortKind::Output };
+        vec![Port::new(0, 0, kind, self.value.get().width())]
     }
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx) {
-        ctx.set_port(0, self.value.get(), 1);
+        if self.output {
+            self.seen.set(ctx.port_value(0));
+        } else {
+            ctx.set_port(0, self.value.get(), 1);
+        }
     }
 }
 
@@ -1057,6 +1086,22 @@ mod tests {
         let mut c = Clock::default();
         c.set_options(&OptionMap::new().with("high", 3).with("low", 2)).unwrap();
         assert_eq!((c.high, c.low), (3, 2));
+    }
+
+    #[test]
+    fn output_pin_observes_and_labels_round_trip() {
+        let mut c = Circuit::new();
+        put(&mut c, 0, 0, Pin::bit(true));
+        let out = Pin::output(1);
+        let seen = out.seen_handle();
+        put(&mut c, 0, 0, out);
+        c.reset();
+        assert_eq!(seen.get(), Value::TRUE);
+        let mut p = Pin::new(Value::FALSE);
+        p.set_options(&OptionMap::new().with("output", true).with("label", "q")).unwrap();
+        assert!(p.is_output());
+        assert_eq!(p.options().string("label"), Ok(Some("q")));
+        assert_eq!(p.ports()[0].kind, PortKind::Input);
     }
 
     #[test]

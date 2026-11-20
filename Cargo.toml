@@ -6,6 +6,8 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+authors = ["adswill"]
+repository = "https://github.com/adswill/logisim-evolution-rust"
 
 [workspace.dependencies]
 eframe = "0.37"

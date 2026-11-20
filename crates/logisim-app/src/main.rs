@@ -1,3 +1,8 @@
+#![allow(dead_code)]
+mod model;
+mod numfmt;
+mod sim;
+
 use eframe::egui;
 
 struct App {
