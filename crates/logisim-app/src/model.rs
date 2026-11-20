@@ -489,7 +489,7 @@ mod tests {
         e.undo();
         e.undo();
         e.undo();
-        assert_eq!(e.circuit().interface.len(), 2);
+        assert_eq!(e.circuit().interface.len(), 1); // only "a" is left
     }
 
     #[test]
