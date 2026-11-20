@@ -15,7 +15,7 @@
 use crate::registry::{Library, PartDesc};
 use std::cell::Cell;
 use std::rc::Rc;
-use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 pub mod buffers;
 pub mod counters;
@@ -339,6 +339,14 @@ impl Component for Ttl {
         }
         m
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        let mut v = vec![OptionSpec::boolean("vcc_gnd_ports", "Show Vcc and GND ports", false)];
+        if let Some(o) = &self.int_option {
+            let default = o.cell.get();
+            v.push(OptionSpec::int(o.key, "Pulse length (ticks)", o.lo, o.hi, default));
+        }
+        v
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         let mut known = vec!["vcc_gnd_ports"];
         known.extend(self.int_option.as_ref().map(|o| o.key));
@@ -520,6 +528,13 @@ mod tests {
                 .unwrap();
             assert_eq!(powered.ports().len(), part.ports().len() + 2, "{}", p.name);
             assert!(fresh.set_options(&OptionMap::new().with("bogus", true)).is_err());
+        }
+    }
+
+    #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{e}"));
         }
     }
 }
