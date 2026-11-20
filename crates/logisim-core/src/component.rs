@@ -20,7 +20,11 @@ pub struct Port {
 
 impl Port {
     pub fn new(x: i32, y: i32, kind: PortKind, width: BitWidth) -> Self {
-        Port { offset: Location::new(x, y), kind, width }
+        Port {
+            offset: Location::new(x, y),
+            kind,
+            width,
+        }
     }
 }
 

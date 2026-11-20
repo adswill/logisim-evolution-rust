@@ -40,11 +40,36 @@ pub struct Value {
 }
 
 impl Value {
-    pub const NIL: Value = Value { width: 0, error: 0, unknown: 0, value: 0 };
-    pub const FALSE: Value = Value { width: 1, error: 0, unknown: 0, value: 0 };
-    pub const TRUE: Value = Value { width: 1, error: 0, unknown: 0, value: 1 };
-    pub const UNKNOWN: Value = Value { width: 1, error: 0, unknown: 1, value: 0 };
-    pub const ERROR: Value = Value { width: 1, error: 1, unknown: 0, value: 0 };
+    pub const NIL: Value = Value {
+        width: 0,
+        error: 0,
+        unknown: 0,
+        value: 0,
+    };
+    pub const FALSE: Value = Value {
+        width: 1,
+        error: 0,
+        unknown: 0,
+        value: 0,
+    };
+    pub const TRUE: Value = Value {
+        width: 1,
+        error: 0,
+        unknown: 0,
+        value: 1,
+    };
+    pub const UNKNOWN: Value = Value {
+        width: 1,
+        error: 0,
+        unknown: 1,
+        value: 0,
+    };
+    pub const ERROR: Value = Value {
+        width: 1,
+        error: 1,
+        unknown: 0,
+        value: 0,
+    };
 
     /// Normalising constructor: masks to width; error beats unknown beats value.
     pub fn create(width: u8, error: u64, unknown: u64, value: u64) -> Value {
@@ -53,7 +78,12 @@ impl Value {
         let error = error & m;
         let unknown = unknown & m & !error;
         let value = value & m & !error & !unknown;
-        Value { width, error, unknown, value }
+        Value {
+            width,
+            error,
+            unknown,
+            value,
+        }
     }
     pub fn error(w: BitWidth) -> Value {
         Value::create(w.0, u64::MAX, 0, 0)
@@ -262,7 +292,10 @@ mod tests {
         assert_eq!(a.xor(b).to_u64(), Some(0b0110));
         assert_eq!((!a).to_u64(), Some(0b0011));
         let x = V::create(4, 0, 0b0001, 0b1100);
-        assert_eq!(x.and(V::known(w, 0b0001)).to_binary_string(), "000x".replace('x', "E"));
+        assert_eq!(
+            x.and(V::known(w, 0b0001)).to_binary_string(),
+            "000x".replace('x', "E")
+        );
         assert_eq!(x.and(V::known(w, 0)).to_u64(), Some(0));
         assert_eq!(x.or(V::known(w, 1)).to_u64(), Some(0b1101));
     }
@@ -282,6 +315,9 @@ mod tests {
         let v = V::from_bits(&[V::TRUE, V::UNKNOWN, V::ERROR, V::FALSE]);
         assert_eq!(v.to_string(), "0Ex1");
         assert_eq!(V::from_bits(&v.bits()), v);
-        assert_eq!(V::known(BitWidth::new(64), u64::MAX).to_u64(), Some(u64::MAX));
+        assert_eq!(
+            V::known(BitWidth::new(64), u64::MAX).to_u64(),
+            Some(u64::MAX)
+        );
     }
 }

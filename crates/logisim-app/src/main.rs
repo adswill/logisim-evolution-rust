@@ -47,6 +47,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "rcirc",
         eframe::NativeOptions::default(),
-        Box::new(|_| Ok(Box::new(App { offset: egui::Vec2::ZERO, zoom: 1.0 }))),
+        Box::new(|_| {
+            Ok(Box::new(App {
+                offset: egui::Vec2::ZERO,
+                zoom: 1.0,
+            }))
+        }),
     )
 }

@@ -110,14 +110,27 @@ impl Circuit {
         }
     }
 
-    pub fn add_component(&mut self, loc: Location, facing: Direction, comp: Box<dyn Component>) -> CompId {
+    pub fn add_component(
+        &mut self,
+        loc: Location,
+        facing: Direction,
+        comp: Box<dyn Component>,
+    ) -> CompId {
         let ports = comp.ports();
-        self.placed.push(Placed { loc, facing, comp, ports });
+        self.placed.push(Placed {
+            loc,
+            facing,
+            comp,
+            ports,
+        });
         self.nets = None;
         CompId(self.placed.len() - 1)
     }
     pub fn add_wire(&mut self, a: Location, b: Location) {
-        assert!(a.x == b.x || a.y == b.y, "wires must be horizontal or vertical");
+        assert!(
+            a.x == b.x || a.y == b.y,
+            "wires must be horizontal or vertical"
+        );
         self.wires.push(Wire { a, b });
         self.nets = None;
     }
@@ -223,7 +236,9 @@ impl Circuit {
 
     fn net_value(&self, n: usize) -> Value {
         let nets = self.nets.as_ref().unwrap();
-        let Some(w) = nets.width[n] else { return Value::NIL };
+        let Some(w) = nets.width[n] else {
+            return Value::NIL;
+        };
         let mut v = Value::NIL;
         for ((id, port), val) in &self.drivers {
             if self.net_of(*id, *port) == n {
@@ -246,7 +261,9 @@ impl Circuit {
     pub fn value_at(&mut self, loc: Location) -> Value {
         self.ensure_nets();
         let nets = self.nets.as_ref().unwrap();
-        nets.of_point.get(&loc).map_or(Value::NIL, |&n| self.net_values[n])
+        nets.of_point
+            .get(&loc)
+            .map_or(Value::NIL, |&n| self.net_values[n])
     }
     pub fn port_value(&mut self, id: CompId, port: usize) -> Value {
         let l = self.port_location(id, port);
@@ -258,11 +275,21 @@ impl Circuit {
     fn schedule(&mut self, comp: CompId, port: usize, value: Value, delay: u32) {
         self.serial += 1;
         let time = self.clock + delay.max(1) as u64;
-        self.queue.push(Reverse(Event { time, serial: self.serial, comp, port, value }));
+        self.queue.push(Reverse(Event {
+            time,
+            serial: self.serial,
+            comp,
+            port,
+            value,
+        }));
     }
 
     fn run_component(&mut self, id: CompId, tick: bool) {
-        let mut ctx = Ctx { circuit: self, id, out: vec![] };
+        let mut ctx = Ctx {
+            circuit: self,
+            id,
+            out: vec![],
+        };
         // temporarily take the component out so the context can borrow the circuit
         let mut comp = std::mem::replace(&mut ctx.circuit.placed[id.0].comp, Box::new(Dummy));
         if tick {
@@ -304,7 +331,11 @@ impl Circuit {
             }
             self.clock = first.time;
             let mut batch = vec![first];
-            while self.queue.peek().is_some_and(|Reverse(e)| e.time == self.clock) {
+            while self
+                .queue
+                .peek()
+                .is_some_and(|Reverse(e)| e.time == self.clock)
+            {
                 batch.push(self.queue.pop().unwrap().0);
             }
             let mut dirty: HashSet<usize> = HashSet::new();
@@ -335,6 +366,13 @@ impl Circuit {
                 self.run_component(id, false);
             }
         }
+    }
+
+    /// Re-evaluate one component (e.g. after its pin value was changed) and settle.
+    pub fn refresh(&mut self, id: CompId) {
+        self.ensure_nets();
+        self.run_component(id, false);
+        self.settle();
     }
 
     /// Tick all clocked components once and settle.
@@ -419,7 +457,11 @@ mod tests {
     #[test]
     fn wire_carries_value_through_inverter() {
         let mut c = Circuit::new();
-        c.add_component(Location::new(0, 0), Direction::East, Box::new(Src(Value::TRUE)));
+        c.add_component(
+            Location::new(0, 0),
+            Direction::East,
+            Box::new(Src(Value::TRUE)),
+        );
         let inv = c.add_component(Location::new(30, 0), Direction::East, Box::new(Inv));
         c.add_wire(Location::new(0, 0), Location::new(20, 0));
         c.reset();
@@ -430,7 +472,11 @@ mod tests {
     #[test]
     fn t_junction_connects() {
         let mut c = Circuit::new();
-        c.add_component(Location::new(0, 0), Direction::East, Box::new(Src(Value::TRUE)));
+        c.add_component(
+            Location::new(0, 0),
+            Direction::East,
+            Box::new(Src(Value::TRUE)),
+        );
         let inv = c.add_component(Location::new(50, 20), Direction::East, Box::new(Inv));
         c.add_wire(Location::new(0, 0), Location::new(40, 0));
         // input port at (40,20) wired up to (40,0), a mid-point of nothing: endpoint join
@@ -468,8 +514,16 @@ mod tests {
     #[test]
     fn conflicting_drivers_give_error() {
         let mut c = Circuit::new();
-        c.add_component(Location::new(0, 0), Direction::East, Box::new(Src(Value::TRUE)));
-        c.add_component(Location::new(20, 0), Direction::East, Box::new(Src(Value::FALSE)));
+        c.add_component(
+            Location::new(0, 0),
+            Direction::East,
+            Box::new(Src(Value::TRUE)),
+        );
+        c.add_component(
+            Location::new(20, 0),
+            Direction::East,
+            Box::new(Src(Value::FALSE)),
+        );
         c.add_wire(Location::new(0, 0), Location::new(20, 0));
         c.reset();
         assert_eq!(c.value_at(Location::new(0, 0)), Value::ERROR);
