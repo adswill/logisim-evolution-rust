@@ -2,7 +2,9 @@
 //! project goes through [`Command`]s so undo/redo is exact.
 
 use logisim_core::{Direction, OptVal};
-use logisim_format::{CircuitDef, ComponentDef, Error, InterfaceDef, ProjectFile, WireDef, SUBCIRCUIT_LIBRARY};
+use logisim_format::{
+    CircuitDef, ComponentDef, Error, InterfaceDef, ProjectFile, WireDef, SUBCIRCUIT_LIBRARY,
+};
 use std::path::PathBuf;
 
 pub type P = (i32, i32);
@@ -26,21 +28,31 @@ impl Command {
                 c.components.insert(*idx, def.clone());
                 Command::RemoveComponent { idx: *idx }
             }
-            Command::RemoveComponent { idx } => {
-                Command::InsertComponent { idx: *idx, def: c.components.remove(*idx) }
-            }
+            Command::RemoveComponent { idx } => Command::InsertComponent {
+                idx: *idx,
+                def: c.components.remove(*idx),
+            },
             Command::ReplaceComponent { idx, def } => {
                 let old = std::mem::replace(&mut c.components[*idx], def.clone());
-                Command::ReplaceComponent { idx: *idx, def: old }
+                Command::ReplaceComponent {
+                    idx: *idx,
+                    def: old,
+                }
             }
             Command::InsertWire { idx, wire } => {
                 c.wires.insert(*idx, *wire);
                 Command::RemoveWire { idx: *idx }
             }
-            Command::RemoveWire { idx } => Command::InsertWire { idx: *idx, wire: c.wires.remove(*idx) },
+            Command::RemoveWire { idx } => Command::InsertWire {
+                idx: *idx,
+                wire: c.wires.remove(*idx),
+            },
             Command::ReplaceWire { idx, wire } => {
                 let old = std::mem::replace(&mut c.wires[*idx], *wire);
-                Command::ReplaceWire { idx: *idx, wire: old }
+                Command::ReplaceWire {
+                    idx: *idx,
+                    wire: old,
+                }
             }
             Command::Batch(cmds) => {
                 let mut inv: Vec<Command> = cmds.iter().map(|x| x.apply(c)).collect();
@@ -71,7 +83,12 @@ pub struct Editor {
 }
 
 fn empty_circuit(name: &str) -> CircuitDef {
-    CircuitDef { name: name.into(), interface: vec![], components: vec![], wires: vec![] }
+    CircuitDef {
+        name: name.into(),
+        interface: vec![],
+        components: vec![],
+        wires: vec![],
+    }
 }
 
 impl Editor {
@@ -92,7 +109,12 @@ impl Editor {
 
     pub fn from_project(project: ProjectFile, path: Option<PathBuf>) -> Self {
         let current = project.main.clone();
-        Editor { project, current, path, ..Editor::new() }
+        Editor {
+            project,
+            current,
+            path,
+            ..Editor::new()
+        }
     }
 
     pub fn dirty(&self) -> bool {
@@ -103,7 +125,9 @@ impl Editor {
     }
 
     pub fn circuit(&self) -> &CircuitDef {
-        self.project.circuit(&self.current).expect("current circuit exists")
+        self.project
+            .circuit(&self.current)
+            .expect("current circuit exists")
     }
     fn circuit_mut(&mut self, name: &str) -> Option<&mut CircuitDef> {
         self.project.circuits.iter_mut().find(|c| c.name == name)
@@ -112,7 +136,9 @@ impl Editor {
     /// Run a command on the open circuit and record it for undo.
     pub fn exec(&mut self, cmd: Command) {
         let name = self.current.clone();
-        let Some(c) = self.circuit_mut(&name) else { return };
+        let Some(c) = self.circuit_mut(&name) else {
+            return;
+        };
         let inv = cmd.apply(c);
         c.interface = derive_interface(c);
         self.undo.push((name, inv));
@@ -198,7 +224,10 @@ impl Editor {
         // remove highest index first so earlier indexes stay valid
         comps.sort_unstable_by(|a, b| b.cmp(a));
         wires.sort_unstable_by(|a, b| b.cmp(a));
-        let mut cmds: Vec<Command> = comps.into_iter().map(|idx| Command::RemoveComponent { idx }).collect();
+        let mut cmds: Vec<Command> = comps
+            .into_iter()
+            .map(|idx| Command::RemoveComponent { idx })
+            .collect();
         cmds.extend(wires.into_iter().map(|idx| Command::RemoveWire { idx }));
         if !cmds.is_empty() {
             self.exec(Command::Batch(cmds));
@@ -221,7 +250,10 @@ impl Editor {
                 }
                 Sel::Wire(i) => {
                     let w = c.wires[*i];
-                    let wire = WireDef { a: (w.a.0 + dx, w.a.1 + dy), b: (w.b.0 + dx, w.b.1 + dy) };
+                    let wire = WireDef {
+                        a: (w.a.0 + dx, w.a.1 + dy),
+                        b: (w.b.0 + dx, w.b.1 + dy),
+                    };
                     Command::ReplaceWire { idx: *i, wire }
                 }
             })
@@ -248,6 +280,15 @@ impl Editor {
         if !cmds.is_empty() {
             self.exec(Command::Batch(cmds));
             self.selection = sel;
+        }
+    }
+
+    /// Change a Pin's value as a "poke": kept in the file but neither undoable nor a structural
+    /// change (so a running simulation is not rebuilt).
+    pub fn poke(&mut self, idx: usize, value: i64) {
+        let name = self.current.clone();
+        if let Some(c) = self.circuit_mut(&name) {
+            c.components[idx].options.set("value", value);
         }
     }
 
@@ -300,7 +341,11 @@ impl Editor {
         self.project
             .circuits
             .iter()
-            .filter(|c| c.components.iter().any(|d| d.library == SUBCIRCUIT_LIBRARY && d.part == name))
+            .filter(|c| {
+                c.components
+                    .iter()
+                    .any(|d| d.library == SUBCIRCUIT_LIBRARY && d.part == name)
+            })
             .map(|c| c.name.clone())
             .collect()
     }
@@ -334,7 +379,10 @@ impl Editor {
     /// A subcircuit instance of `name`, ready to place (refuses recursion into the open circuit).
     pub fn subcircuit_def(&self, name: &str, at: P) -> Result<ComponentDef, String> {
         if name == self.current || self.uses_transitively(name, &self.current) {
-            return Err(format!("'{name}' contains '{}', placing it would make a loop", self.current));
+            return Err(format!(
+                "'{name}' contains '{}', placing it would make a loop",
+                self.current
+            ));
         }
         Ok(ComponentDef {
             library: SUBCIRCUIT_LIBRARY.into(),
@@ -346,7 +394,9 @@ impl Editor {
     }
 
     fn uses_transitively(&self, outer: &str, inner: &str) -> bool {
-        let Some(c) = self.project.circuit(outer) else { return false };
+        let Some(c) = self.project.circuit(outer) else {
+            return false;
+        };
         c.components
             .iter()
             .filter(|d| d.library == SUBCIRCUIT_LIBRARY)
@@ -373,7 +423,11 @@ pub fn rotate_ccw(d: Direction) -> Direction {
 /// on the left, output pins on the right, each side ordered top to bottom.
 pub fn derive_interface(c: &CircuitDef) -> Vec<InterfaceDef> {
     let mut pins: Vec<(&ComponentDef, bool, String, u8)> = vec![];
-    for d in c.components.iter().filter(|d| d.library == "Wiring" && d.part == "Pin") {
+    for d in c
+        .components
+        .iter()
+        .filter(|d| d.library == "Wiring" && d.part == "Pin")
+    {
         let label = match d.options.string("label") {
             Ok(Some(l)) if !l.trim().is_empty() => l.trim().to_string(),
             _ => continue,
@@ -456,9 +510,15 @@ mod tests {
         e.place(gate(0, 0));
         assert!(e.set_option(0, "inputs", 1).is_err());
         assert!(e.set_option(0, "inputs", 4).is_ok());
-        assert_eq!(e.circuit().components[0].options.int("inputs", 0, 99), Ok(Some(4)));
+        assert_eq!(
+            e.circuit().components[0].options.int("inputs", 0, 99),
+            Ok(Some(4))
+        );
         e.undo();
-        assert_eq!(e.circuit().components[0].options.int("inputs", 0, 99), Ok(Some(2)));
+        assert_eq!(
+            e.circuit().components[0].options.int("inputs", 0, 99),
+            Ok(Some(2))
+        );
     }
 
     #[test]
@@ -483,7 +543,12 @@ mod tests {
         e.place(pin(300, 0).option("label", "q").option("output", true));
         e.place(pin(0, 90)); // no label → not in the interface
         let i = &e.circuit().interface;
-        assert_eq!(i.iter().map(|p| (p.name.as_str(), p.input)).collect::<Vec<_>>(), [("a", true), ("b", true), ("q", false)]);
+        assert_eq!(
+            i.iter()
+                .map(|p| (p.name.as_str(), p.input))
+                .collect::<Vec<_>>(),
+            [("a", true), ("b", true), ("q", false)]
+        );
         assert_eq!(i[1].offset, (0, 20));
         assert_eq!(i[2].offset, (60, 0));
         e.undo();
