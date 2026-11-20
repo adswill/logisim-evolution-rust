@@ -94,7 +94,7 @@ impl LogUi {
             self.wave = WaveState::default();
             self.note = None;
         }
-        if let (Some((_, s)), Some(c)) = (self.session.as_mut(), sim.as_deref_mut()) {
+        if let (Some((_, s)), Some(c)) = (self.session.as_mut(), sim) {
             s.observe(c, ticks);
             if s.settings.timing == Timing::RealTime {
                 ctx.request_repaint_after(Duration::from_millis(100));
@@ -164,7 +164,7 @@ impl LogUi {
             egui::Window::new("Logging settings")
                 .open(&mut open)
                 .default_size([420.0, 480.0])
-                .show(ctx, |ui| self.settings_ui(ui, sim.as_deref_mut()));
+                .show(ctx, |ui| self.settings_ui(ui, sim));
             self.show_log = open;
         }
         if self.show_vectors {
