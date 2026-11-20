@@ -4,9 +4,9 @@
 //! (only if `enable`); last = data input at (0,0). `n = 2^select_bits`.
 //! Unlike most parts the data pin is the origin, as in Logisim (outputs lie east of it).
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{OptionMap, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
 
-use super::{classify_enable, DisabledOutput, Enabled, SelectLoc, DELAY};
+use super::{classify_enable, DisabledOutput, Enabled, SelectLoc, DELAY, DISABLED_NAMES, SELECT_LOC_NAMES};
 
 #[derive(Debug, Clone)]
 pub struct DemuxOptions {
@@ -80,6 +80,31 @@ impl Component for Demultiplexer {
         "Demultiplexer"
     }
 
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("width", o.width.get())
+            .with("select_bits", o.select_bits)
+            .with("enable", o.enable)
+            .with("disabled", OptionMap::name_of(o.disabled, &DISABLED_NAMES))
+            .with("select_loc", OptionMap::name_of(o.select_loc, &SELECT_LOC_NAMES))
+            .with("tristate", o.tristate)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "select_bits", "enable", "disabled", "select_loc", "tristate"])?;
+        let o = &mut self.opts;
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("select_bits", 1, 8)? {
+            o.select_bits = v as u8;
+        }
+        o.enable = m.boolean("enable")?.unwrap_or(o.enable);
+        o.disabled = m.choice("disabled", &DISABLED_NAMES)?.unwrap_or(o.disabled);
+        o.select_loc = m.choice("select_loc", &SELECT_LOC_NAMES)?.unwrap_or(o.select_loc);
+        o.tristate = m.boolean("tristate")?.unwrap_or(o.tristate);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         let o = &self.opts;
         let n = self.outputs() as i32;

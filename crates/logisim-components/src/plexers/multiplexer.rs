@@ -3,9 +3,11 @@
 //! Port order: 0 = output at (0,0); `1..=n` = data inputs 0..n-1; `n+1` = select;
 //! `n+2` = enable (only if `enable` is set). `n = 2^select_bits`.
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{OptionMap, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
 
-use super::{classify_enable, DisabledOutput, Enabled, SelectLoc, DELAY};
+use super::{classify_enable, DisabledOutput, Enabled, SelectLoc, DELAY, DISABLED_NAMES, SELECT_LOC_NAMES};
+
+const SIZES: [(&str, MuxSize); 2] = [("narrow", MuxSize::Narrow), ("wide", MuxSize::Wide)];
 
 /// Body size of the multiplexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -88,6 +90,31 @@ impl Component for Multiplexer {
         "Multiplexer"
     }
 
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("width", o.width.get())
+            .with("select_bits", o.select_bits)
+            .with("enable", o.enable)
+            .with("disabled", OptionMap::name_of(o.disabled, &DISABLED_NAMES))
+            .with("select_loc", OptionMap::name_of(o.select_loc, &SELECT_LOC_NAMES))
+            .with("size", OptionMap::name_of(o.size, &SIZES))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "select_bits", "enable", "disabled", "select_loc", "size"])?;
+        let o = &mut self.opts;
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("select_bits", 1, 8)? {
+            o.select_bits = v as u8;
+        }
+        o.enable = m.boolean("enable")?.unwrap_or(o.enable);
+        o.disabled = m.choice("disabled", &DISABLED_NAMES)?.unwrap_or(o.disabled);
+        o.select_loc = m.choice("select_loc", &SELECT_LOC_NAMES)?.unwrap_or(o.select_loc);
+        o.size = m.choice("size", &SIZES)?.unwrap_or(o.size);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         let o = &self.opts;
         let n = self.inputs();

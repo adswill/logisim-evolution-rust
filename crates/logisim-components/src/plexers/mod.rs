@@ -22,6 +22,11 @@ pub use priority_encoder::{PriorityEncoder, PriorityEncoderOptions};
 /// Propagation delay of every plexer, in simulator ticks (Logisim's `PlexersLibrary.DELAY`).
 pub const DELAY: u32 = 3;
 
+pub(crate) const DISABLED_NAMES: [(&str, DisabledOutput); 2] =
+    [("zero", DisabledOutput::Zero), ("floating", DisabledOutput::Floating)];
+pub(crate) const SELECT_LOC_NAMES: [(&str, SelectLoc); 2] =
+    [("bottom_left", SelectLoc::BottomLeft), ("top_right", SelectLoc::TopRight)];
+
 /// What outputs show while the part is disabled (enable input low).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DisabledOutput {
@@ -97,6 +102,72 @@ pub fn library() -> Library {
             }),
             part("Bit Selector", || Box::new(BitSelector::new(BitSelectorOptions::default()))),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use logisim_core::OptionMap;
+
+    #[test]
+    fn every_part_round_trips_its_options() {
+        for p in &library().parts {
+            let part = (p.make)();
+            let saved = part.options();
+            let mut fresh = (p.make)();
+            fresh.set_options(&saved).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+            assert_eq!(fresh.options(), saved, "{}", p.name);
+            assert_eq!(fresh.ports(), part.ports(), "{}", p.name);
+        }
+    }
+
+    #[test]
+    fn non_default_options_round_trip_and_change_ports() {
+        let cases: [(&str, OptionMap); 5] = [
+            (
+                "Multiplexer",
+                OptionMap::new()
+                    .with("width", 8)
+                    .with("select_bits", 3)
+                    .with("enable", true)
+                    .with("disabled", "floating")
+                    .with("select_loc", "top_right")
+                    .with("size", "narrow"),
+            ),
+            (
+                "Demultiplexer",
+                OptionMap::new().with("width", 4).with("select_bits", 2).with("enable", true).with("tristate", true),
+            ),
+            ("Decoder", OptionMap::new().with("select_bits", 3).with("select_loc", "top_right").with("disabled", "floating")),
+            ("Priority Encoder", OptionMap::new().with("select_bits", 2).with("disabled", "floating")),
+            ("Bit Selector", OptionMap::new().with("width", 16).with("group", 4).with("select_loc", "top_right")),
+        ];
+        let lib = library();
+        for (name, opts) in cases {
+            let desc = lib.parts.iter().find(|p| p.name == name).unwrap();
+            let default_ports = (desc.make)().ports();
+            let mut c = (desc.make)();
+            c.set_options(&opts).unwrap();
+            let saved = c.options();
+            for (k, v) in &opts.0 {
+                assert_eq!(saved.0.get(k), Some(v), "{name}.{k}");
+            }
+            assert_ne!(c.ports(), default_ports, "{name}");
+            let mut again = (desc.make)();
+            again.set_options(&c.options()).unwrap();
+            assert_eq!(again.ports(), c.ports(), "{name}");
+        }
+    }
+
+    #[test]
+    fn bad_options_are_rejected() {
+        for p in &library().parts {
+            let mut c = (p.make)();
+            assert!(c.set_options(&OptionMap::new().with("bogus", 1)).is_err(), "{}", p.name);
+            assert!(c.set_options(&OptionMap::new().with("select_bits", 99)).is_err(), "{}", p.name);
+            assert!(c.set_options(&OptionMap::new().with("disabled", "maybe")).is_err(), "{}", p.name);
+        }
     }
 }
 

@@ -3,9 +3,9 @@
 //! Port order: 0 = output (`group` bits) at (0,0); 1 = data input (-30,0); 2 = select (-10,±10).
 //! The select width is derived from the data width and group size (see [`BitSelectorOptions::select_bits`]).
 
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{OptionMap, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
 
-use super::{SelectLoc, DELAY};
+use super::{SelectLoc, DELAY, SELECT_LOC_NAMES};
 
 #[derive(Debug, Clone)]
 pub struct BitSelectorOptions {
@@ -66,6 +66,25 @@ impl Component for BitSelector {
         "Bit Selector"
     }
 
+    fn options(&self) -> OptionMap {
+        let o = &self.opts;
+        OptionMap::new()
+            .with("width", o.width.get())
+            .with("group", o.group.get())
+            .with("select_loc", OptionMap::name_of(o.select_loc, &SELECT_LOC_NAMES))
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["width", "group", "select_loc"])?;
+        let o = &mut self.opts;
+        if let Some(v) = m.int("width", 1, 64)? {
+            o.width = BitWidth::new(v as u8);
+        }
+        if let Some(v) = m.int("group", 1, 64)? {
+            o.group = BitWidth::new(v as u8);
+        }
+        o.select_loc = m.choice("select_loc", &SELECT_LOC_NAMES)?.unwrap_or(o.select_loc);
+        Ok(())
+    }
     fn ports(&self) -> Vec<Port> {
         let o = &self.opts;
         let sel_y = if o.select_loc == SelectLoc::BottomLeft { 10 } else { -10 };
