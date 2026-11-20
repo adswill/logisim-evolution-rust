@@ -122,6 +122,74 @@ impl OptionMap {
     }
 }
 
+/// What kind of value an option holds, for building editor widgets and validating input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptionKind {
+    Bool,
+    /// Integer in `min..=max` (shown in decimal, hex or binary by the editor).
+    Int {
+        min: i64,
+        max: i64,
+    },
+    /// One of a fixed set of names (the same names `set_options` accepts).
+    Choice {
+        names: Vec<&'static str>,
+    },
+    Str,
+}
+
+/// Editor-facing description of one option of a part.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionSpec {
+    pub key: &'static str,
+    /// Human-readable label shown in the attribute panel.
+    pub label: &'static str,
+    pub kind: OptionKind,
+    pub default: OptVal,
+}
+
+impl OptionSpec {
+    pub fn boolean(key: &'static str, label: &'static str, default: bool) -> Self {
+        OptionSpec {
+            key,
+            label,
+            kind: OptionKind::Bool,
+            default: OptVal::Bool(default),
+        }
+    }
+    pub fn int(key: &'static str, label: &'static str, min: i64, max: i64, default: i64) -> Self {
+        OptionSpec {
+            key,
+            label,
+            kind: OptionKind::Int { min, max },
+            default: OptVal::Int(default),
+        }
+    }
+    pub fn choice(
+        key: &'static str,
+        label: &'static str,
+        names: &[&'static str],
+        default: &'static str,
+    ) -> Self {
+        OptionSpec {
+            key,
+            label,
+            kind: OptionKind::Choice {
+                names: names.to_vec(),
+            },
+            default: OptVal::Str(default.into()),
+        }
+    }
+    pub fn string(key: &'static str, label: &'static str, default: &str) -> Self {
+        OptionSpec {
+            key,
+            label,
+            kind: OptionKind::Str,
+            default: OptVal::Str(default.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

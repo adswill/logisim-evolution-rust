@@ -1,7 +1,7 @@
 //! The Gates library: AND, OR, NAND, NOR, XOR, XNOR, NOT, Buffer, controlled buffer/inverter.
 //! Port layout matches Logisim: port 0 is the output at (0,0); inputs are 1..=n on the left.
 
-use logisim_core::{BitWidth, Component, Direction, Location, OptionMap, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, Direction, Location, OptionMap, OptionSpec, Port, PortKind, PropagateCtx, Value};
 
 use crate::registry::{Library, PartDesc};
 
@@ -262,6 +262,17 @@ impl Component for Gate {
             .with("output", OptionMap::name_of(o.output, &OUTPUT_MODES))
             .with("undefined", OptionMap::name_of(o.undefined, &UNDEFINED))
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("inputs", "Number of inputs", 2, 64, 2),
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::int("negated", "Negated inputs (bit mask)", 0, i64::MAX, 0),
+            OptionSpec::int("size", "Gate size", 30, 70, 50),
+            OptionSpec::choice("xor_mode", "Multi-input XOR behaviour", &["odd", "one"], "odd"),
+            OptionSpec::choice("output", "Output value", &["normal", "zero_float", "float_one"], "normal"),
+            OptionSpec::choice("undefined", "Unconnected inputs", &["ignore", "error"], "ignore"),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["inputs", "width", "negated", "size", "xor_mode", "output", "undefined"])?;
         let mut o = self.opts.clone();
@@ -349,6 +360,12 @@ impl Component for Buffer {
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get()).with("undefined", OptionMap::name_of(self.undefined, &UNDEFINED))
     }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::choice("undefined", "Unconnected inputs", &["ignore", "error"], "ignore"),
+        ]
+    }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width", "undefined"])?;
         if let Some(v) = m.int("width", 1, 64)? {
@@ -432,6 +449,12 @@ impl Component for ControlledBuffer {
     }
     fn options(&self) -> OptionMap {
         OptionMap::new().with("width", self.width.get()).with("undefined", OptionMap::name_of(self.undefined, &UNDEFINED))
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::choice("undefined", "Unconnected inputs", &["ignore", "error"], "ignore"),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width", "undefined"])?;
@@ -704,6 +727,13 @@ mod tests {
         assert_eq!(h.options(), saved);
         assert!(g.set_options(&OptionMap::new().with("inputs", 1)).is_err());
         assert!(g.set_options(&OptionMap::new().with("bogus", 1)).is_err());
+    }
+
+    #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{e}"));
+        }
     }
 
     #[test]
