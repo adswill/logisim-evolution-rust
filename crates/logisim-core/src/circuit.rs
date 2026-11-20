@@ -48,6 +48,8 @@ struct Nets {
     members: Vec<usize>,
     /// per net: width, or None if no ports on it
     width: Vec<Option<BitWidth>>,
+    /// per net: pull-up/down/error requested by pull resistors
+    pull: Vec<Option<Value>>,
     /// nets whose ports disagree on width
     width_errors: Vec<usize>,
 }
@@ -183,6 +185,22 @@ impl Circuit {
                 }
             }
         }
+        // tunnels with equal names are one net
+        let mut by_name: HashMap<String, usize> = HashMap::new();
+        for p in &self.placed {
+            if let Some(name) = p.comp.tunnel_name() {
+                let i = idx[&p.port_loc(0)];
+                match by_name.get(&name) {
+                    Some(&j) => {
+                        let (a, b) = (find(&mut uf, i), find(&mut uf, j));
+                        uf[a] = b;
+                    }
+                    None => {
+                        by_name.insert(name, i);
+                    }
+                }
+            }
+        }
         let mut roots: HashMap<usize, usize> = HashMap::new();
         let mut nets = Nets::default();
         for (i, p) in pts.iter().enumerate() {
@@ -195,11 +213,22 @@ impl Circuit {
         }
         nets.members = vec![0; nets.count];
         nets.width = vec![None; nets.count];
+        nets.pull = vec![None; nets.count];
+        let mut pulls: Vec<(bool, bool, bool)> = vec![(false, false, false); nets.count];
         let mut bad = HashSet::new();
         for p in &self.placed {
+            if let Some(pv) = p.comp.pull_value() {
+                let e = &mut pulls[nets.of_point[&p.port_loc(0)]];
+                e.0 |= pv == Value::TRUE;
+                e.1 |= pv == Value::FALSE;
+                e.2 |= pv == Value::ERROR;
+            }
             for (i, port) in p.ports.iter().enumerate() {
                 let n = nets.of_point[&p.port_loc(i)];
                 nets.members[n] += 1;
+                if port.width == crate::component::Port::ANY_WIDTH {
+                    continue;
+                }
                 match nets.width[n] {
                     None => nets.width[n] = Some(port.width),
                     Some(w) if w != port.width => {
@@ -211,6 +240,17 @@ impl Circuit {
         }
         for w in &self.wires {
             nets.members[nets.of_point[&w.a]] += 1;
+        }
+        for (n, (up, down, err)) in pulls.into_iter().enumerate() {
+            nets.pull[n] = if err {
+                Some(Value::ERROR)
+            } else if up && !down {
+                Some(Value::TRUE)
+            } else if down && !up {
+                Some(Value::FALSE)
+            } else {
+                None // none, or up and down cancel out
+            };
         }
         nets.width_errors = bad.into_iter().collect();
         nets.width_errors.sort();
@@ -235,20 +275,34 @@ impl Circuit {
     }
 
     fn net_value(&self, n: usize) -> Value {
+        self.net_value_excluding(n, None)
+    }
+
+    /// Combined value of a net: all drivers (minus `exclude`), then pull resistors.
+    fn net_value_excluding(&self, n: usize, exclude: Option<CompId>) -> Value {
         let nets = self.nets.as_ref().unwrap();
         let Some(w) = nets.width[n] else {
             return Value::NIL;
         };
         let mut v = Value::NIL;
         for ((id, port), val) in &self.drivers {
-            if self.net_of(*id, *port) == n {
+            if Some(*id) != exclude && self.net_of(*id, *port) == n {
                 v = v.combine(*val);
             }
         }
         if v == Value::NIL {
-            Value::unknown(w)
-        } else {
-            v
+            v = Value::unknown(w);
+        }
+        match nets.pull[n] {
+            Some(p) => {
+                let bits: Vec<Value> = v
+                    .bits()
+                    .into_iter()
+                    .map(|b| if b == Value::UNKNOWN { p } else { b })
+                    .collect();
+                Value::from_bits(&bits)
+            }
+            None => v,
         }
     }
 
@@ -406,6 +460,10 @@ impl PropagateCtx for Ctx<'_> {
     fn port_value(&self, i: usize) -> Value {
         let n = self.circuit.net_of(self.id, i);
         self.circuit.net_values[n]
+    }
+    fn port_value_others(&self, i: usize) -> Value {
+        let n = self.circuit.net_of(self.id, i);
+        self.circuit.net_value_excluding(n, Some(self.id))
     }
     fn is_port_connected(&self, i: usize) -> bool {
         let c = &*self.circuit;

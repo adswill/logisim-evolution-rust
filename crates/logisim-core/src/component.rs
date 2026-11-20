@@ -19,6 +19,8 @@ pub struct Port {
 }
 
 impl Port {
+    /// Width of ports that adopt the width of whatever net they touch (probe, pull resistor).
+    pub const ANY_WIDTH: BitWidth = BitWidth(0);
     pub fn new(x: i32, y: i32, kind: PortKind, width: BitWidth) -> Self {
         Port {
             offset: Location::new(x, y),
@@ -32,6 +34,9 @@ impl Port {
 pub trait PropagateCtx {
     /// Value currently on the net at port `i` (unknown if nothing drives it).
     fn port_value(&self, i: usize) -> Value;
+    /// Like [`port_value`](Self::port_value) but ignoring what *this component* drives on
+    /// the net. Needed by bidirectional parts (splitters) to avoid feeding themselves.
+    fn port_value_others(&self, i: usize) -> Value;
     /// True if port `i` touches a wire carrying at least one other connection.
     fn is_port_connected(&self, i: usize) -> bool;
     /// Drive port `i` with `v`; takes effect after `delay` ticks (min 1).
@@ -42,6 +47,14 @@ pub trait PropagateCtx {
 pub trait Component {
     fn name(&self) -> &str;
     fn ports(&self) -> Vec<Port>;
+    /// Tunnels with the same name are joined into one net (port 0 is used).
+    fn tunnel_name(&self) -> Option<String> {
+        None
+    }
+    /// Pull resistors: `TRUE`/`FALSE`/`ERROR` pulls floating bits of the net at port 0.
+    fn pull_value(&self) -> Option<Value> {
+        None
+    }
     /// Called whenever an input net changes (and once at reset).
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx);
     /// Called on each clock tick (default: ignore).

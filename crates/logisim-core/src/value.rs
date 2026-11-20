@@ -146,6 +146,28 @@ impl Value {
         self.is_fully_defined().then_some(self.value)
     }
 
+    /// Widen (or narrow) to `new_width`; added high bits take the value of the 1-bit `fill`
+    /// (anything but 0/1/E becomes X), as in Logisim's `Value.extendWidth`.
+    pub fn extend_width(self, new_width: u8, fill: Value) -> Value {
+        if self.width == new_width {
+            return self;
+        }
+        let high = if self.width >= 64 {
+            0
+        } else {
+            u64::MAX << self.width
+        };
+        if fill == Value::ERROR {
+            Value::create(new_width, self.error | high, self.unknown, self.value)
+        } else if fill == Value::FALSE {
+            Value::create(new_width, self.error, self.unknown, self.value)
+        } else if fill == Value::TRUE {
+            Value::create(new_width, self.error, self.unknown, self.value | high)
+        } else {
+            Value::create(new_width, self.error, self.unknown | high, self.value)
+        }
+    }
+
     pub fn and(self, o: Value) -> Value {
         let f0 = !self.value & !self.error & !self.unknown;
         let f1 = !o.value & !o.error & !o.unknown;
@@ -309,6 +331,14 @@ mod tests {
         assert_eq!(V::FALSE.controls(V::known(w, 3)), V::unknown(w));
         assert_eq!(V::TRUE.controls(V::known(w, 3)).to_u64(), Some(3));
         assert_eq!(V::ERROR.controls(V::known(w, 3)), V::error(w));
+    }
+    #[test]
+    fn extend() {
+        let v = V::known(BitWidth::new(2), 0b10);
+        assert_eq!(v.extend_width(4, V::FALSE).to_u64(), Some(0b0010));
+        assert_eq!(v.extend_width(4, V::TRUE).to_u64(), Some(0b1110));
+        assert_eq!(v.extend_width(4, V::UNKNOWN).to_binary_string(), "xx10");
+        assert_eq!(v.extend_width(3, V::ERROR).to_binary_string(), "E10");
     }
     #[test]
     fn bits_roundtrip_and_display() {
