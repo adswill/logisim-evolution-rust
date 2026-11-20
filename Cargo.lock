@@ -2768,6 +2768,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui_dock",
+ "logisim-analyze",
  "logisim-components",
  "logisim-core",
  "logisim-format",

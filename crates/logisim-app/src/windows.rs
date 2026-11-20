@@ -73,6 +73,7 @@ pub trait AppWindow {
 pub fn registered_windows() -> Vec<Box<dyn AppWindow>> {
     let mut reg: Vec<Box<dyn AppWindow>> = vec![];
     reg.push(Box::new(ProjectInfoWindow));
+    reg.push(Box::new(crate::analyze_ui::AnalysisWindow::default()));
     crate::log_ui::register(&mut reg);
     reg
 }

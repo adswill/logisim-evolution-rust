@@ -325,6 +325,12 @@ impl AnalyzerModel {
         }
     }
 
+    /// Set every row of one output bit; only that output's typed expression is dropped.
+    pub fn fill_output(&mut self, out: usize, e: Entry) {
+        self.table.fill_column(out, e);
+        self.exprs[out] = None;
+    }
+
     /// Replace the whole table (same shape); all typed expressions are dropped.
     pub fn set_table(&mut self, table: TruthTable) {
         assert_eq!(table.input_count(), self.inputs.bit_count());
@@ -480,6 +486,18 @@ mod tests {
             Err(ModelError::UnknownVariable(_))
         ));
         assert_eq!(m, before);
+    }
+
+    #[test]
+    fn filling_one_output_keeps_the_others_expressions() {
+        let mut m = model_ab_y();
+        m.add_output(v("z", 1)).unwrap();
+        m.set_expression_text("y", "a b").unwrap();
+        m.set_expression_text("z", "a").unwrap();
+        m.fill_output(0, Entry::One);
+        assert!(m.table().column(0).iter().all(|e| *e == Entry::One));
+        assert!(m.stored_expression(0).is_none());
+        assert_eq!(m.stored_expression(1).unwrap().to_string(), "a");
     }
 
     #[test]

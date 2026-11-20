@@ -666,6 +666,18 @@ impl Editor {
         name
     }
 
+    /// Add a ready-made circuit (for example one the analyzer generated) and return its name,
+    /// de-duplicated like [`Self::add_circuit`].
+    pub fn add_circuit_def(&mut self, mut def: CircuitDef) -> String {
+        let name = self.add_circuit(&def.name);
+        def.name = name.clone();
+        def.interface = derive_interface(&def);
+        if let Some(c) = self.circuit_mut(&name) {
+            *c = def;
+        }
+        name
+    }
+
     pub fn open_circuit(&mut self, name: &str) {
         if self.project.circuit(name).is_some() {
             self.current = name.into();

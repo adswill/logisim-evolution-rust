@@ -1,4 +1,5 @@
 mod actions;
+mod analyze_ui;
 mod app;
 mod canvas;
 mod catalog;
