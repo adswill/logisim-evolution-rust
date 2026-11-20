@@ -3,7 +3,7 @@
 //! Port order: 0 = output at (0,0); `1..=n` = data inputs 0..n-1; `n+1` = select;
 //! `n+2` = enable (only if `enable` is set). `n = 2^select_bits`.
 
-use logisim_core::{OptionMap, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{OptionMap, OptionSpec, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
 
 use super::{classify_enable, DisabledOutput, Enabled, SelectLoc, DELAY, DISABLED_NAMES, SELECT_LOC_NAMES};
 
@@ -99,6 +99,16 @@ impl Component for Multiplexer {
             .with("disabled", OptionMap::name_of(o.disabled, &DISABLED_NAMES))
             .with("select_loc", OptionMap::name_of(o.select_loc, &SELECT_LOC_NAMES))
             .with("size", OptionMap::name_of(o.size, &SIZES))
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("width", "Data bits", 1, 64, 1),
+            OptionSpec::int("select_bits", "Select bits", 1, 8, 1),
+            OptionSpec::boolean("enable", "Enable input", false),
+            OptionSpec::choice("disabled", "Disabled output", &["zero", "floating"], "zero"),
+            OptionSpec::choice("select_loc", "Select location", &["bottom_left", "top_right"], "bottom_left"),
+            OptionSpec::choice("size", "Size", &["narrow", "wide"], "wide"),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["width", "select_bits", "enable", "disabled", "select_loc", "size"])?;

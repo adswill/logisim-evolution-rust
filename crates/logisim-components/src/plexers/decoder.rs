@@ -3,7 +3,7 @@
 //! Port order: `0..n` = outputs 0..n-1; `n` = select at (0,0); `n+1` = enable at (-10,0)
 //! (only if `enable`). `n = 2^select_bits`. Outputs lie east of the select pin, as in Logisim.
 
-use logisim_core::{OptionMap, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{OptionMap, OptionSpec, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
 
 use super::{classify_enable, DisabledOutput, Enabled, SelectLoc, DELAY, DISABLED_NAMES, SELECT_LOC_NAMES};
 
@@ -81,6 +81,15 @@ impl Component for Decoder {
             .with("disabled", OptionMap::name_of(o.disabled, &DISABLED_NAMES))
             .with("select_loc", OptionMap::name_of(o.select_loc, &SELECT_LOC_NAMES))
             .with("tristate", o.tristate)
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("select_bits", "Select bits", 1, 8, 1),
+            OptionSpec::boolean("enable", "Enable input", false),
+            OptionSpec::choice("disabled", "Disabled output", &["zero", "floating"], "zero"),
+            OptionSpec::choice("select_loc", "Select location", &["bottom_left", "top_right"], "bottom_left"),
+            OptionSpec::boolean("tristate", "Unselected outputs float", false),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["select_bits", "enable", "disabled", "select_loc", "tristate"])?;

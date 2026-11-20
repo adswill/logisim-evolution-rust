@@ -4,7 +4,7 @@
 //! `n+1` = enable in; `n+2` = enable out (high when enabled and no input is high);
 //! `n+3` = group select (high when any input is high). `n = 2^select_bits`.
 
-use logisim_core::{OptionMap, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{OptionMap, OptionSpec, BitWidth, Component, Port, PortKind, PropagateCtx, Value};
 
 use super::{DisabledOutput, DELAY, DISABLED_NAMES};
 
@@ -56,6 +56,12 @@ impl Component for PriorityEncoder {
         OptionMap::new()
             .with("select_bits", self.opts.select_bits)
             .with("disabled", OptionMap::name_of(self.opts.disabled, &DISABLED_NAMES))
+    }
+    fn option_specs(&self) -> Vec<OptionSpec> {
+        vec![
+            OptionSpec::int("select_bits", "Select bits", 1, 8, 3),
+            OptionSpec::choice("disabled", "Disabled output", &["zero", "floating"], "zero"),
+        ]
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
         m.reject_unknown(&["select_bits", "disabled"])?;

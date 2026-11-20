@@ -111,6 +111,13 @@ mod tests {
     use logisim_core::OptionMap;
 
     #[test]
+    fn option_specs_match_options() {
+        for p in &library().parts {
+            logisim_core::validate_specs(&mut *(p.make)()).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        }
+    }
+
+    #[test]
     fn every_part_round_trips_its_options() {
         for p in &library().parts {
             let part = (p.make)();
