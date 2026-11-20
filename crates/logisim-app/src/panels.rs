@@ -115,6 +115,8 @@ impl App {
                 self.menu_check(ui, Action::RunToggle, running);
                 self.menu_item(ui, Action::Step, true);
                 self.menu_item(ui, Action::ResetSim, true);
+                ui.separator();
+                self.log_ui.menu_items(ui);
             });
             ui.menu_button("Help", |ui| {
                 self.menu_item(ui, Action::CommandPalette, true);

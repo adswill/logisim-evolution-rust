@@ -4,6 +4,7 @@
 use crate::actions::Action;
 use crate::catalog::{self, CatalogPart};
 use crate::examples;
+use crate::log_ui::{LogContext, LogUi};
 use crate::model::{Editor, Sel, P};
 use crate::nets::NetAnalysis;
 use crate::numfmt::Base;
@@ -169,6 +170,7 @@ pub struct App {
     pub(crate) point_net: HashMap<P, usize>,
     pub(crate) hover_net: Option<usize>,
     pub(crate) title_sent: String,
+    pub(crate) log_ui: LogUi,
 }
 
 impl App {
@@ -219,6 +221,7 @@ impl App {
             point_net: HashMap::new(),
             hover_net: None,
             title_sent: String::new(),
+            log_ui: LogUi::new(),
         };
         if example {
             app.load_example();
@@ -791,5 +794,14 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
         self.palette_ui(&ctx);
         self.shortcuts_ui(&ctx);
+        self.log_ui.update(
+            &ctx,
+            LogContext {
+                project: &self.ed.project,
+                circuit: &self.ed.current,
+                ticks: self.sim.as_ref().map_or(0, |s| s.ticks),
+                sim: self.sim.as_mut().map(|s| &mut s.circuit),
+            },
+        );
     }
 }

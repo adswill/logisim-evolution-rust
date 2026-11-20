@@ -5,6 +5,7 @@ mod catalog;
 mod examples;
 mod fit;
 mod fuzzy;
+mod log_ui;
 mod model;
 mod nets;
 mod numfmt;
