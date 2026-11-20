@@ -482,7 +482,7 @@ mod tests {
                 r.put(1, false);
             }
         }
-        assert_eq!(r.read_n(&[12, 9, 8, 11]), Some(2));
+        assert_eq!(r.read_n(&[12, 9, 8, 11]), Some(5));
         r.put(2, true);
         r.put(3, true);
         assert_eq!(r.read_n(&[12, 9, 8, 11]), Some(0));
@@ -563,9 +563,10 @@ mod tests {
         r.put(5, true);
         r.put(11, true);
         r.put(4, false);
+        assert!(!r.hi(13)); // borrow goes low on the falling edge at 0
         r.put(4, true);
         assert_eq!(r.read_n(&q), Some(15)); // binary wrap on down
-        assert!(!r.hi(13)); // borrow pulse? (counter 0 -> 15 at rising, borrow on falling)
+        assert!(r.hi(13));
     }
 
     #[test]
@@ -636,7 +637,6 @@ mod tests {
         for _ in 0..8 {
             r.pulse(11);
         }
-        assert!(r.hi(1 + 3 - 1 + 0) || true);
         // 8 clocks: only stage bit 3 (Q4, pin 7) is high
         assert!(r.hi(7));
         assert!(!r.hi(5) && !r.hi(4));

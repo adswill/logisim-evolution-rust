@@ -3,18 +3,17 @@
 //! Every chip is a DIP package. Logic is written against **datasheet pin numbers** (1-based) via
 //! [`Pins`], so it can be checked against a datasheet directly.
 //!
-//! Port layout (chip facing east, `n` = pin count, height 60): pin `p` (1-based) with
-//! `i = p - 1` sits at `(i*20+10, 30)` when `i < n/2` (bottom row, left to right) and at
-//! `((n/2 - 1 - (i - n/2))*20+10 ... )` mirrored on the top row at `y = -30`, exactly as Logisim's
-//! `AbstractTtlGate` (`x = width - (i - n/2)*20 - 10`, `width = n*10`).
-//! Port order = pin order, skipping unused pins and the power pins; when the
-//! [`TtlOptions::vcc_gnd_ports`] option is on, two extra ports (GND, then VCC) are appended and the
-//! outputs go to X unless GND = 0 and VCC = 1.
+//! Port layout (chip facing east, `n` = pin count, body height 60): pin `p` (1-based, `i = p - 1`)
+//! sits at `(i*20+10, height-30)` for `i < n/2` (bottom row, left to right) and at
+//! `(n*10 - (i-n/2)*20 - 10, -30)` on the top row (right to left), as in Logisim's
+//! `AbstractTtlGate`. Port order = pin order, skipping unused and power pins; with
+//! [`TtlOptions::vcc_gnd_ports`] on (option `vcc_gnd_ports`), two ports (GND, then VCC) are
+//! appended and the outputs go to X unless GND = 0 and VCC = 1.
 //!
 //! Chips with open-collector outputs drive `0` or X (floating), never `1`.
 
 use crate::registry::{Library, PartDesc};
-use logisim_core::{BitWidth, Component, Port, PortKind, PropagateCtx, Value};
+use logisim_core::{BitWidth, Component, OptionMap, Port, PortKind, PropagateCtx, Value};
 
 pub mod buffers;
 pub mod counters;
@@ -232,6 +231,20 @@ impl Ttl {
         opts: TtlOptions,
         logic: impl FnMut(&mut Pins) + 'static,
     ) -> Ttl {
+        let mut t = Ttl {
+            spec,
+            opts,
+            map: vec![],
+            ports: vec![],
+            logic: Box::new(logic),
+        };
+        t.layout();
+        t
+    }
+
+    /// (Re)build the pin -> port map and port list from the spec and options.
+    fn layout(&mut self) {
+        let spec = self.spec;
         let n = spec.pins as i32;
         let mut map = vec![None; spec.pins as usize + 1];
         let mut ports = vec![];
@@ -249,7 +262,7 @@ impl Ttl {
                 continue;
             }
             if p == spec.gnd || p == spec.vcc {
-                if opts.vcc_gnd_ports {
+                if self.opts.vcc_gnd_ports {
                     power.push((p, x, y));
                 }
                 continue;
@@ -270,13 +283,8 @@ impl Ttl {
             map[p as usize] = Some(ports.len());
             ports.push(Port::new(x, y, PortKind::Input, BitWidth::ONE));
         }
-        Ttl {
-            spec,
-            opts,
-            map,
-            ports,
-            logic: Box::new(logic),
-        }
+        self.map = map;
+        self.ports = ports;
     }
 
     pub fn spec(&self) -> &Spec {
@@ -297,6 +305,17 @@ impl Component for Ttl {
     }
     fn ports(&self) -> Vec<Port> {
         self.ports.clone()
+    }
+    fn options(&self) -> OptionMap {
+        OptionMap::new().with("vcc_gnd_ports", self.opts.vcc_gnd_ports)
+    }
+    fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+        m.reject_unknown(&["vcc_gnd_ports"])?;
+        if let Some(b) = m.boolean("vcc_gnd_ports")? {
+            self.opts.vcc_gnd_ports = b;
+        }
+        self.layout();
+        Ok(())
     }
     fn propagate(&mut self, ctx: &mut dyn PropagateCtx) {
         let mut pins = Pins {
@@ -349,6 +368,7 @@ pub(crate) mod testing {
     pub struct Rig {
         pub c: Circuit,
         chip: CompId,
+        name: &'static str,
         pins: HashMap<u8, (CompId, PinHandle)>,
         map: Vec<Option<usize>>,
     }
@@ -357,6 +377,7 @@ pub(crate) mod testing {
         pub fn new(chip: Ttl) -> Rig {
             let spec = *chip.spec();
             let map = chip.map.clone();
+            let name = spec.name;
             let ports = chip.ports();
             let mut c = Circuit::new();
             let chip_id = c.add_component(Location::new(200, 200), Direction::East, Box::new(chip));
@@ -379,9 +400,13 @@ pub(crate) mod testing {
             Rig {
                 c,
                 chip: chip_id,
+                name,
                 pins,
                 map,
             }
+        }
+        pub fn name(&self) -> &'static str {
+            self.name
         }
         pub fn set(&mut self, p: u8, v: Value) {
             let (id, h) = &self.pins[&p];
@@ -423,6 +448,32 @@ pub(crate) mod testing {
             self.put(p, false);
             self.put(p, true);
             self.put(p, false);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_part_round_trips_its_options() {
+        let lib = library();
+        assert!(lib.parts.len() > 80);
+        for p in &lib.parts {
+            let part = (p.make)();
+            assert_eq!(part.name(), p.name);
+            let saved = part.options();
+            let mut fresh = (p.make)();
+            fresh.set_options(&saved).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+            assert_eq!(fresh.options(), saved, "{}", p.name);
+            // with power ports on, ports gain GND and VCC
+            let mut powered = (p.make)();
+            powered
+                .set_options(&OptionMap::new().with("vcc_gnd_ports", true))
+                .unwrap();
+            assert_eq!(powered.ports().len(), part.ports().len() + 2, "{}", p.name);
+            assert!(fresh.set_options(&OptionMap::new().with("bogus", true)).is_err());
         }
     }
 }
