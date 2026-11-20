@@ -5,6 +5,9 @@ use logisim_core::{BitWidth, Component, Direction, Location, OptionMap, OptionSp
 
 use crate::registry::{Library, PartDesc};
 
+mod pla;
+pub use pla::Pla;
+
 /// The Gates library with default options for each part.
 pub fn library() -> Library {
     let part = |name, make: fn() -> Box<dyn Component>| PartDesc { name, make };
@@ -19,6 +22,9 @@ pub fn library() -> Library {
             part("NOR Gate", || Box::new(Gate::nor(GateOptions::default()))),
             part("XOR Gate", || Box::new(Gate::xor(GateOptions::default()))),
             part("XNOR Gate", || Box::new(Gate::xnor(GateOptions::default()))),
+            part("Odd Parity", || Box::new(Gate::odd_parity(GateOptions::default()))),
+            part("Even Parity", || Box::new(Gate::even_parity(GateOptions::default()))),
+            part("PLA", || Box::new(Pla::new())),
             part("Controlled Buffer", || Box::new(ControlledBuffer::buffer(1))),
             part("Controlled Inverter", || Box::new(ControlledBuffer::inverter(1))),
         ],
@@ -36,6 +42,10 @@ pub enum GateKind {
     Nor,
     Xor,
     Xnor,
+    /// Rectangular "2k+1" gate: high when an odd number of inputs are high.
+    OddParity,
+    /// Rectangular "2k" gate: high when an even number of inputs are high.
+    EvenParity,
 }
 
 /// How multi-input XOR/XNOR behave.
@@ -221,6 +231,15 @@ impl Gate {
     pub fn xnor(opts: GateOptions) -> Self {
         Gate::new(GateKind::Xnor, opts)
     }
+    pub fn odd_parity(opts: GateOptions) -> Self {
+        Gate::new(GateKind::OddParity, opts)
+    }
+    pub fn even_parity(opts: GateOptions) -> Self {
+        Gate::new(GateKind::EvenParity, opts)
+    }
+    fn is_parity(&self) -> bool {
+        matches!(self.kind, GateKind::OddParity | GateKind::EvenParity)
+    }
 
     fn compute(&self, inputs: &[Value]) -> Value {
         let fold =
@@ -236,6 +255,8 @@ impl Gate {
             GateKind::Nor => !fold(Value::or),
             GateKind::Xor => xor(),
             GateKind::Xnor => !xor(),
+            GateKind::OddParity => fold(Value::xor),
+            GateKind::EvenParity => !fold(Value::xor),
         }
     }
 }
@@ -249,21 +270,27 @@ impl Component for Gate {
             GateKind::Nor => "NOR Gate",
             GateKind::Xor => "XOR Gate",
             GateKind::Xnor => "XNOR Gate",
+            GateKind::OddParity => "Odd Parity",
+            GateKind::EvenParity => "Even Parity",
         }
     }
     fn options(&self) -> OptionMap {
         let o = &self.opts;
-        OptionMap::new()
+        let mut m = OptionMap::new()
             .with("inputs", o.inputs)
             .with("width", o.width.get())
             .with("negated", o.negated as i64)
             .with("size", o.size)
             .with("xor_mode", OptionMap::name_of(o.xor_mode, &XOR_MODES))
             .with("output", OptionMap::name_of(o.output, &OUTPUT_MODES))
-            .with("undefined", OptionMap::name_of(o.undefined, &UNDEFINED))
+            .with("undefined", OptionMap::name_of(o.undefined, &UNDEFINED));
+        if self.is_parity() {
+            m.0.remove("xor_mode"); // parity gates have no XOR-mode choice
+        }
+        m
     }
     fn option_specs(&self) -> Vec<OptionSpec> {
-        vec![
+        let mut specs = vec![
             OptionSpec::int("inputs", "Number of inputs", 2, 64, 2),
             OptionSpec::int("width", "Data bits", 1, 64, 1),
             OptionSpec::int("negated", "Negated inputs (bit mask)", 0, i64::MAX, 0),
@@ -271,10 +298,18 @@ impl Component for Gate {
             OptionSpec::choice("xor_mode", "Multi-input XOR behaviour", &["odd", "one"], "odd"),
             OptionSpec::choice("output", "Output value", &["normal", "zero_float", "float_one"], "normal"),
             OptionSpec::choice("undefined", "Unconnected inputs", &["ignore", "error"], "ignore"),
-        ]
+        ];
+        if self.is_parity() {
+            specs.retain(|s| s.key != "xor_mode");
+        }
+        specs
     }
     fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
-        m.reject_unknown(&["inputs", "width", "negated", "size", "xor_mode", "output", "undefined"])?;
+        if self.is_parity() {
+            m.reject_unknown(&["inputs", "width", "negated", "size", "output", "undefined"])?;
+        } else {
+            m.reject_unknown(&["inputs", "width", "negated", "size", "xor_mode", "output", "undefined"])?;
+        }
         let mut o = self.opts.clone();
         if let Some(v) = m.int("inputs", 2, 64)? {
             o.inputs = v as usize;
@@ -739,10 +774,56 @@ mod tests {
     #[test]
     fn registry_lists_every_gate() {
         let lib = library();
-        assert_eq!(lib.parts.len(), 10);
+        assert_eq!(lib.parts.len(), 13);
         for p in &lib.parts {
             assert_eq!((p.make)().name(), p.name);
         }
         assert!(crate::all_libraries().iter().any(|l| l.name == "Gates"));
     }
+    /// Output of an n-input gate for the given input bits.
+    fn eval_n(make: fn(GateOptions) -> Gate, bits: &[bool]) -> Value {
+        let mut c = Circuit::new();
+        let g = c.add_component(
+            Location::new(200, 0),
+            Direction::East,
+            Box::new(make(GateOptions::default().inputs(bits.len()))),
+        );
+        for (i, &b) in bits.iter().enumerate() {
+            let to = c.port_location(g, i + 1);
+            let from = Location::new(to.x - 30, to.y);
+            let pin = c.add_component(from, Direction::East, Box::new(Pin::bit(b)));
+            c.add_wire(c.port_location(pin, 0), to);
+        }
+        c.reset();
+        c.port_value(g, 0)
+    }
+
+    #[test]
+    fn parity_gates_count_high_inputs() {
+        for n in 2..=4usize {
+            for mask in 0..1u32 << n {
+                let bits: Vec<bool> = (0..n).map(|i| mask >> i & 1 == 1).collect();
+                let odd = mask.count_ones() % 2 == 1;
+                let v = |b| if b { Value::TRUE } else { Value::FALSE };
+                assert_eq!(eval_n(Gate::odd_parity, &bits), v(odd), "odd n={n} mask={mask:b}");
+                assert_eq!(eval_n(Gate::even_parity, &bits), v(!odd), "even n={n} mask={mask:b}");
+            }
+        }
+    }
+
+    #[test]
+    fn parity_gates_are_rectangular_with_no_xor_mode() {
+        let g = Gate::odd_parity(GateOptions::default());
+        // no XOR curve bonus and no output bubble: inputs sit at -size
+        let xs: Vec<_> = g.ports().iter().map(|p| p.offset.x).collect();
+        assert_eq!(xs, [0, -50, -50]);
+        for gate in [Gate::odd_parity(GateOptions::default()), Gate::even_parity(GateOptions::default())] {
+            assert!(!gate.options().0.contains_key("xor_mode"));
+            assert!(gate.option_specs().iter().all(|s| s.key != "xor_mode"));
+        }
+        let mut e = Gate::even_parity(GateOptions::default());
+        assert!(e.set_options(&OptionMap::new().with("xor_mode", "one")).is_err());
+        assert_eq!(e.name(), "Even Parity");
+    }
+
 }
