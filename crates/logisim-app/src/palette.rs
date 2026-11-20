@@ -14,6 +14,8 @@ pub enum Target {
     },
     OpenCircuit(String),
     PlaceCircuit(String),
+    /// Open (toggle) a plug-in window by id.
+    Window(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +26,11 @@ pub struct Entry {
     pub detail: String,
 }
 
-pub fn entries(parts: &[CatalogPart], circuits: &[String]) -> Vec<Entry> {
+pub fn entries(
+    parts: &[CatalogPart],
+    circuits: &[String],
+    windows: &[(String, String, String)],
+) -> Vec<Entry> {
     let mut v: Vec<Entry> = Action::ALL
         .iter()
         .filter(|a| **a != Action::CommandPalette)
@@ -52,6 +58,13 @@ pub fn entries(parts: &[CatalogPart], circuits: &[String]) -> Vec<Entry> {
             target: Target::PlaceCircuit(c.clone()),
             label: format!("Place circuit {c}"),
             detail: "Circuits".into(),
+        });
+    }
+    for (id, title, desc) in windows {
+        v.push(Entry {
+            target: Target::Window(id.clone()),
+            label: format!("Window: {title}"),
+            detail: desc.clone(),
         });
     }
     v
@@ -90,7 +103,11 @@ mod tests {
     use crate::catalog::all_parts;
 
     fn setup() -> Vec<Entry> {
-        entries(&all_parts(), &["main".into(), "adder".into()])
+        entries(
+            &all_parts(),
+            &["main".into(), "adder".into()],
+            &[("analysis".into(), "Analysis".into(), "Truth tables".into())],
+        )
     }
 
     #[test]
@@ -102,6 +119,7 @@ mod tests {
         assert_eq!(top("fit"), "Fit circuit to window");
         assert!(top("open circuit add").contains("adder"));
         assert_eq!(top("theme high"), "Theme: high contrast");
+        assert_eq!(top("window analysis"), "Window: Analysis");
     }
 
     #[test]

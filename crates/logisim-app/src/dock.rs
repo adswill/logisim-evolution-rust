@@ -104,7 +104,7 @@ impl App {
         self.dock = dock;
         // save the layout now and then (cheap compare), not every frame
         self.frame += 1;
-        if self.frame % 30 == 0 {
+        if self.frame.is_multiple_of(30) {
             if let Some(t) = to_text(&self.dock) {
                 if self.prefs.layout.as_deref() != Some(t.as_str()) {
                     self.prefs.layout = Some(t);

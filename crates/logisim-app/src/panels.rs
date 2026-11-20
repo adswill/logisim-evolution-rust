@@ -118,6 +118,31 @@ impl App {
                 ui.separator();
                 self.log_ui.menu_items(ui);
             });
+            ui.menu_button("Window", |ui| {
+                use crate::windows::WindowGroup;
+                let mut toggled: Option<&'static str> = None;
+                for g in WindowGroup::ALL {
+                    let mut any = false;
+                    for w in self.windows.list.iter().filter(|w| w.group() == g) {
+                        if !any {
+                            ui.label(egui::RichText::new(g.label()).weak());
+                            any = true;
+                        }
+                        let mut on = self.windows.open.contains(w.id());
+                        let r = ui.checkbox(&mut on, w.title());
+                        let r = if w.description().is_empty() { r } else { r.on_hover_text(w.description()) };
+                        if r.changed() {
+                            toggled = Some(w.id());
+                        }
+                    }
+                }
+                if self.windows.list.is_empty() {
+                    ui.weak("No extra windows registered");
+                }
+                if let Some(id) = toggled {
+                    self.windows.toggle(id);
+                }
+            });
             ui.menu_button("Help", |ui| {
                 self.menu_item(ui, Action::CommandPalette, true);
                 self.menu_item(ui, Action::Shortcuts, true);

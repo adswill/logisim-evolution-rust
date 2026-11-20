@@ -80,8 +80,8 @@ pub struct Editor {
     /// Bumped on every change to the project; views and simulations rebuild when it changes.
     pub version: u64,
     pub saved_version: u64,
-    undo: Vec<(String, Command)>,
-    redo: Vec<(String, Command)>,
+    undo: Vec<(String, Command, String)>,
+    redo: Vec<(String, Command, String)>,
     clip: Option<Clip>,
     hue_mem: HashMap<String, HueMemory>,
     nets_cache: Option<((u64, String), NetAnalysis)>,
@@ -181,18 +181,38 @@ impl Editor {
         self.project.circuits.iter_mut().find(|c| c.name == name)
     }
 
-    /// Run a command on the open circuit and record it for undo.
+    /// Run a command on the open circuit and record it for undo (generic label).
     pub fn exec(&mut self, cmd: Command) {
+        self.exec_as("Edit", cmd);
+    }
+
+    /// Run a command and record it under a human-readable label for the undo history.
+    pub fn exec_as(&mut self, label: &str, cmd: Command) {
         let name = self.current.clone();
         let Some(c) = self.circuit_mut(&name) else {
             return;
         };
         let inv = cmd.apply(c);
         c.interface = derive_interface(c);
-        self.undo.push((name, inv));
+        self.undo.push((name, inv, label.to_string()));
         self.redo.clear();
         self.version += 1;
         self.selection.clear();
+    }
+
+    /// Labels of the steps that Undo would take back, most recent first.
+    pub fn undo_labels(&self) -> Vec<String> {
+        self.undo.iter().rev().map(|(_, _, l)| l.clone()).collect()
+    }
+    /// Labels of the steps that Redo would re-apply, next first.
+    pub fn redo_labels(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|(_, _, l)| l.clone()).collect()
+    }
+    /// Undo `n` steps at once (jump back in the history).
+    pub fn undo_steps(&mut self, n: usize) {
+        for _ in 0..n {
+            self.undo();
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -203,11 +223,11 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
-        if let Some((name, inv)) = self.undo.pop() {
+        if let Some((name, inv, label)) = self.undo.pop() {
             if let Some(c) = self.circuit_mut(&name) {
                 let redo = inv.apply(c);
                 c.interface = derive_interface(c);
-                self.redo.push((name.clone(), redo));
+                self.redo.push((name.clone(), redo, label));
                 self.current = name;
                 self.version += 1;
                 self.selection.clear();
@@ -215,11 +235,11 @@ impl Editor {
         }
     }
     pub fn redo(&mut self) {
-        if let Some((name, cmd)) = self.redo.pop() {
+        if let Some((name, cmd, label)) = self.redo.pop() {
             if let Some(c) = self.circuit_mut(&name) {
                 let inv = cmd.apply(c);
                 c.interface = derive_interface(c);
-                self.undo.push((name.clone(), inv));
+                self.undo.push((name.clone(), inv, label));
                 self.current = name;
                 self.version += 1;
                 self.selection.clear();
@@ -231,7 +251,8 @@ impl Editor {
 
     pub fn place(&mut self, def: ComponentDef) {
         let idx = self.circuit().components.len();
-        self.exec(Command::InsertComponent { idx, def });
+        let label = format!("Place {}", def.part);
+        self.exec_as(&label, Command::InsertComponent { idx, def });
         self.selection = vec![Sel::Comp(idx)];
     }
 
@@ -256,7 +277,7 @@ impl Editor {
             })
             .collect::<Vec<_>>();
         if !cmds.is_empty() {
-            self.exec(Command::Batch(cmds));
+            self.exec_as("Draw wire", Command::Batch(cmds));
         }
     }
 
@@ -278,7 +299,7 @@ impl Editor {
             .collect();
         cmds.extend(wires.into_iter().map(|idx| Command::RemoveWire { idx }));
         if !cmds.is_empty() {
-            self.exec(Command::Batch(cmds));
+            self.exec_as("Delete", Command::Batch(cmds));
         }
     }
 
@@ -393,7 +414,7 @@ impl Editor {
         }
         removals.sort_unstable_by(|a, b| b.cmp(a));
         cmds.extend(removals.into_iter().map(|idx| Command::RemoveWire { idx }));
-        self.exec(Command::Batch(cmds));
+        self.exec_as("Move", Command::Batch(cmds));
         // removals may shift wire indexes, so keep only the selection that is still valid
         let (nc, nw) = (self.circuit().components.len(), self.circuit().wires.len());
         self.selection = sel
@@ -456,7 +477,7 @@ impl Editor {
     /// create a loop in this circuit.
     pub fn paste(&mut self, at: Option<P>) -> usize {
         match self.clip.clone() {
-            Some(clip) => self.insert_clip(&clip, at),
+            Some(clip) => self.insert_clip("Paste", &clip, at),
             None => 0,
         }
     }
@@ -464,10 +485,10 @@ impl Editor {
     /// Copy + paste the selection in one step, leaving the clipboard alone.
     pub fn duplicate(&mut self) -> usize {
         let clip = self.selection_clip();
-        self.insert_clip(&clip, None)
+        self.insert_clip("Duplicate", &clip, None)
     }
 
-    fn insert_clip(&mut self, clip: &Clip, at: Option<P>) -> usize {
+    fn insert_clip(&mut self, label: &str, clip: &Clip, at: Option<P>) -> usize {
         let o = clip.origin();
         let (dx, dy) = at.map_or((20, 20), |a| (a.0 - o.0, a.1 - o.1));
         let mut skipped = 0;
@@ -497,7 +518,7 @@ impl Editor {
             nw += 1;
         }
         if !cmds.is_empty() {
-            self.exec(Command::Batch(cmds));
+            self.exec_as(label, Command::Batch(cmds));
             self.selection = (first_comp..nc)
                 .map(Sel::Comp)
                 .chain((first_wire..nw).map(Sel::Wire))
@@ -522,7 +543,7 @@ impl Editor {
             })
             .collect();
         if !cmds.is_empty() {
-            self.exec(Command::Batch(cmds));
+            self.exec_as("Rotate", Command::Batch(cmds));
             self.selection = sel;
         }
     }
@@ -538,7 +559,8 @@ impl Editor {
 
     pub fn replace_component(&mut self, idx: usize, def: ComponentDef) {
         if self.circuit().components[idx] != def {
-            self.exec(Command::ReplaceComponent { idx, def });
+            let label = format!("Change {}", def.part);
+            self.exec_as(&label, Command::ReplaceComponent { idx, def });
             self.selection = vec![Sel::Comp(idx)];
         }
     }
@@ -604,8 +626,8 @@ impl Editor {
             return Err(format!("'{name}' is used by {}", users.join(", ")));
         }
         self.project.circuits.retain(|c| c.name != name);
-        self.undo.retain(|(n, _)| n != name);
-        self.redo.retain(|(n, _)| n != name);
+        self.undo.retain(|(n, _, _)| n != name);
+        self.redo.retain(|(n, _, _)| n != name);
         if self.current == name {
             self.current = self.project.main.clone();
         }
@@ -973,5 +995,36 @@ mod tests {
         e.open_circuit("sub");
         assert_eq!(e.paste(None), 1); // sub inside sub would loop
         assert!(e.circuit().components.is_empty());
+    }
+
+    #[test]
+    fn undo_history_is_labelled_and_can_jump_back() {
+        let mut e = Editor::new();
+        e.place(gate(100, 100));
+        e.add_wire_path((0, 0), (20, 0));
+        e.selection = vec![Sel::Comp(0)];
+        e.move_selection(10, 0);
+        e.rotate_selection();
+        e.delete_selection();
+        assert_eq!(
+            e.undo_labels(),
+            ["Delete", "Rotate", "Move", "Draw wire", "Place AND Gate"]
+        );
+        let after_place = {
+            let mut c = Editor::new();
+            c.place(gate(100, 100));
+            c.project
+        };
+        e.undo_steps(3);
+        assert_eq!(e.undo_labels(), ["Draw wire", "Place AND Gate"]);
+        assert_eq!(e.redo_labels(), ["Move", "Rotate", "Delete"]);
+        e.undo_steps(1);
+        assert_eq!(
+            e.project.circuits[0].components,
+            after_place.circuits[0].components
+        );
+        e.selection = vec![Sel::Comp(0)];
+        e.duplicate();
+        assert_eq!(e.undo_labels()[0], "Duplicate");
     }
 }

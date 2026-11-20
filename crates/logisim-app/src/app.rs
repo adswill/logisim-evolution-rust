@@ -137,6 +137,7 @@ pub struct App {
     pub(crate) focus_search: bool,
     pub(crate) dock: egui_dock::DockState<crate::dock::PanelKind>,
     pub(crate) frame: u64,
+    pub(crate) windows: crate::windows::Windows,
     pub(crate) fit_requested: bool,
     /// Dev/screenshot flag `--theme`: forces a theme without touching the saved preferences.
     pub(crate) theme_override: Option<crate::prefs::ThemeChoice>,
@@ -193,6 +194,7 @@ impl App {
                 .as_deref()
                 .map_or_else(crate::dock::default_layout, crate::dock::from_text),
             frame: 0,
+            windows: crate::windows::Windows::default(),
             fit_requested: false,
             theme_override: None,
             canvas_id: egui::Id::NULL,
@@ -791,6 +793,17 @@ impl eframe::App for App {
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default().show(ui, |ui| self.dock_ui(ui));
+        // plug-in windows get the editor and the live simulation
+        let mut windows = std::mem::take(&mut self.windows);
+        {
+            let mut env = crate::windows::WindowEnv {
+                editor: &mut self.ed,
+                sim: self.sim.as_mut(),
+                status: &mut self.status,
+            };
+            windows.show(&ctx, &mut env);
+        }
+        self.windows = windows;
         self.palette_ui(&ctx);
         self.shortcuts_ui(&ctx);
         self.log_ui.update(

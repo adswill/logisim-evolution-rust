@@ -23,7 +23,19 @@ impl App {
             .iter()
             .map(|c| c.name.clone())
             .collect();
-        let entries = palette::entries(&self.catalog, &circuits);
+        let windows: Vec<(String, String, String)> = self
+            .windows
+            .list
+            .iter()
+            .map(|w| {
+                (
+                    w.id().to_string(),
+                    w.title().to_string(),
+                    w.description().to_string(),
+                )
+            })
+            .collect();
+        let entries = palette::entries(&self.catalog, &circuits, &windows);
         self.palette = Some(PaletteState {
             query: String::new(),
             selected: 0,
@@ -124,6 +136,17 @@ impl App {
             Target::Part { library, part } => self.start_place(&library, &part),
             Target::OpenCircuit(n) => self.ed.open_circuit(&n),
             Target::PlaceCircuit(n) => self.start_place(SUBCIRCUIT_LIBRARY, &n),
+            Target::Window(id) => {
+                let known = self
+                    .windows
+                    .list
+                    .iter()
+                    .find(|w| w.id() == id)
+                    .map(|w| w.id());
+                if let Some(k) = known {
+                    self.windows.open.insert(k);
+                }
+            }
         }
     }
 
