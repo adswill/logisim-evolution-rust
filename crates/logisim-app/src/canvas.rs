@@ -91,19 +91,48 @@ impl App {
             Tool::Place(lib, part) => self.place_tool(&resp, &painter, view, &th, &lib, &part),
         }
         self.drag_drop_part(&resp, &painter, view, &th);
-        if resp.clicked_by(PointerButton::Secondary) {
+        self.draw_snap(&painter, view, &th);
+        // right-click: context menu in Select, otherwise it cancels the current tool
+        if matches!(self.tool, Tool::Select) {
+            if resp.secondary_clicked() {
+                match self.cursor_world.and_then(|w| self.hit_any(w)) {
+                    Some(h) if !self.ed.selection.contains(&h) => self.ed.selection = vec![h],
+                    None => self.ed.selection.clear(),
+                    _ => {}
+                }
+            }
+            resp.context_menu(|ui| self.canvas_menu(ui));
+        } else if resp.clicked_by(PointerButton::Secondary) {
             self.tool = Tool::Select;
             self.wire_chain = None;
         }
         self.draw_net_tooltip(&painter, &th, resp.hover_pos());
-        if let Some((x, y)) = self.hover {
-            if self.infos.iter().any(|i| i.abs.contains(&(x, y))) {
-                painter.circle_stroke(
-                    view.to_screen(x as f32, y as f32),
-                    7.0,
-                    Stroke::new(1.5, th.select),
-                );
-            }
+        self.hover_feedback(&painter, view, &th, resp.hover_pos());
+        self.minimap(ui, rect, &th);
+        self.welcome(ui, rect);
+        // screen readers: a summary of what the canvas contains
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Canvas,
+                true,
+                format!(
+                    "Circuit canvas for {}: {} parts, {} wires, {} selected. Arrow keys move the selection, Tab selects the next part.",
+                    self.ed.current,
+                    self.ed.circuit().components.len(),
+                    self.ed.circuit().wires.len(),
+                    self.ed.selection.len()
+                ),
+            )
+        });
+        if self.sim.as_ref().is_some_and(|s| s.oscillating()) {
+            let msg = "Circuit does not settle: a feedback loop keeps changing. Break the loop or add a clocked part (flip-flop).";
+            painter.text(
+                rect.center_top() + Vec2::new(0.0, 10.0),
+                Align2::CENTER_TOP,
+                msg,
+                egui::FontId::proportional(13.0),
+                th.v_err,
+            );
         }
     }
 
@@ -451,7 +480,11 @@ impl App {
                     Some(v) if v.width().get() > 1 && v.is_unknown() => (th.dim, 4.0, true),
                     Some(v) if v.width().get() > 1 => (base, 4.5, false),
                     Some(v) if v == Value::TRUE => (base, 3.4, false),
-                    Some(v) if v == Value::FALSE => (base.gamma_multiply(0.45), 2.0, false),
+                    Some(v) if v == Value::FALSE => (
+                        base.gamma_multiply(if th.mode_high_contrast { 0.75 } else { 0.45 }),
+                        2.0,
+                        false,
+                    ),
                     Some(_) => (th.dim, 2.2, true),
                 }
             } else {

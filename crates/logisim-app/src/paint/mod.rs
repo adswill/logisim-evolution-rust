@@ -29,6 +29,8 @@ pub enum ThemeMode {
 #[derive(Clone)]
 pub struct Theme {
     pub dark: bool,
+    /// High-contrast theme: stronger strokes, less dimming.
+    pub mode_high_contrast: bool,
     pub bg: Color32,
     pub grid: Color32,
     pub grid_major: Color32,
@@ -50,6 +52,7 @@ impl Theme {
         match mode {
             ThemeMode::Dark => Theme {
                 dark: true,
+                mode_high_contrast: false,
                 bg: Color32::from_rgb(24, 26, 31),
                 grid: Color32::from_rgb(38, 41, 48),
                 grid_major: Color32::from_rgb(50, 54, 63),
@@ -67,6 +70,7 @@ impl Theme {
             },
             ThemeMode::HighContrast => Theme {
                 dark: true,
+                mode_high_contrast: true,
                 bg: Color32::BLACK,
                 grid: Color32::from_rgb(52, 52, 52),
                 grid_major: Color32::from_rgb(96, 96, 96),
@@ -84,6 +88,7 @@ impl Theme {
             },
             ThemeMode::Light => Theme {
                 dark: false,
+                mode_high_contrast: false,
                 bg: Color32::from_rgb(250, 250, 252),
                 grid: Color32::from_rgb(232, 234, 240),
                 grid_major: Color32::from_rgb(214, 218, 228),

@@ -24,6 +24,7 @@ pub struct DevFlags {
     pub theme: Option<crate::prefs::ThemeChoice>,
     pub palette: bool,
     pub shortcuts: bool,
+    pub minimap: bool,
 }
 
 /// Drag-and-drop payload when dragging a part from the toolbox.
@@ -137,6 +138,9 @@ pub struct App {
     pub(crate) dock: egui_dock::DockState<crate::dock::PanelKind>,
     pub(crate) frame: u64,
     pub(crate) windows: crate::windows::Windows,
+    pub(crate) problems: Vec<crate::diagnostics::Problem>,
+    /// Dev/screenshot flag `--minimap` (not saved).
+    pub(crate) dev_minimap: bool,
     pub(crate) fit_requested: bool,
     /// Dev/screenshot flag `--theme`: forces a theme without touching the saved preferences.
     pub(crate) theme_override: Option<crate::prefs::ThemeChoice>,
@@ -193,6 +197,8 @@ impl App {
                 .map_or_else(crate::dock::default_layout, crate::dock::from_text),
             frame: 0,
             windows: crate::windows::Windows::default(),
+            problems: vec![],
+            dev_minimap: false,
             fit_requested: false,
             theme_override: None,
             canvas_id: egui::Id::NULL,
@@ -239,6 +245,7 @@ impl App {
             app.open_palette();
         }
         app.show_shortcuts = dev.shortcuts;
+        app.dev_minimap = dev.minimap;
         app.refresh_style(ctx);
         app
     }
@@ -391,6 +398,7 @@ impl App {
                 .enumerate()
                 .flat_map(|(i, n)| n.points.iter().map(move |p| (*p, i)))
                 .collect();
+            self.refresh_problems();
         }
         if self.sim_on {
             if self.sim_key != key || self.sim.is_none() {
@@ -735,6 +743,31 @@ impl App {
         }
         if f6 {
             self.cycle_focus(ctx, shift);
+        }
+        // Tab / Shift+Tab step through the parts while the canvas has keyboard focus
+        if ctx.memory(|m| m.has_focus(self.canvas_id)) {
+            let n = self.ed.circuit().components.len();
+            let dir = ctx.input_mut(|i| {
+                if i.consume_key(Modifiers::NONE, Key::Tab) {
+                    1i32
+                } else if i.consume_key(Modifiers::SHIFT, Key::Tab) {
+                    -1
+                } else {
+                    0
+                }
+            });
+            if dir != 0 && n > 0 {
+                let cur = match self.ed.selection[..] {
+                    [Sel::Comp(i)] => i as i32,
+                    _ => -1,
+                };
+                let next = (cur + dir).rem_euclid(n as i32) as usize;
+                self.ed.selection = vec![Sel::Comp(next)];
+                self.status = format!(
+                    "Selected {}",
+                    self.infos.get(next).map_or("part", |i| i.name.as_str())
+                );
+            }
         }
         // arrow keys nudge the selection (one grid step, Shift = ten)
         let step = if shift { 10 * GRID } else { GRID };

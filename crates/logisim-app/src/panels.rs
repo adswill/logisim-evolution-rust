@@ -65,9 +65,29 @@ impl App {
                 self.menu_item(ui, Action::Quit, true);
             });
             ui.menu_button("Edit", |ui| {
-                let (u, r) = (self.ed.can_undo(), self.ed.can_redo());
-                self.menu_item(ui, Action::Undo, u);
-                self.menu_item(ui, Action::Redo, r);
+                let (ul, rl) = (self.ed.undo_labels(), self.ed.redo_labels());
+                for (a, labels, what) in [(Action::Undo, &ul, "Undo"), (Action::Redo, &rl, "Redo")] {
+                    let text = labels.first().map_or(what.to_string(), |l| format!("{what} {l}"));
+                    let mut b = egui::Button::new(text);
+                    if let Some(sc) = a.shortcut() {
+                        b = b.shortcut_text(sc);
+                    }
+                    if ui.add_enabled(!labels.is_empty(), b).clicked() {
+                        self.run_action(a, ui.ctx());
+                        ui.close();
+                    }
+                }
+                ui.menu_button("Undo history", |ui| {
+                    if ul.is_empty() {
+                        ui.weak("Nothing to undo yet");
+                    }
+                    for (k, l) in ul.iter().take(20).enumerate() {
+                        if ui.button(format!("{}. {l}", k + 1)).on_hover_text("Go back to before this step").clicked() {
+                            self.ed.undo_steps(k + 1);
+                            ui.close();
+                        }
+                    }
+                });
                 ui.separator();
                 self.menu_item(ui, Action::Cut, has_sel);
                 self.menu_item(ui, Action::Copy, has_sel);
@@ -687,7 +707,7 @@ impl App {
         ui.label("Ports of this circuit when used as a part:");
         let iface = self.ed.circuit().interface.clone();
         if iface.is_empty() {
-            ui.weak("none yet. Give a Pin a label to make it a port.");
+            ui.weak("none yet. Every labelled Pin you place becomes a port.");
         }
         for p in iface {
             let kind = if p.input { "input" } else { "output" };
@@ -705,6 +725,8 @@ impl App {
     pub(crate) fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(&self.status);
+            ui.weak("·");
+            ui.weak(self.tool_hint());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(format!("zoom {:.0}%", self.view().zoom * 100.0));
                 if let Some((x, y)) = self.hover {
@@ -712,6 +734,21 @@ impl App {
                 }
             });
         });
+    }
+
+    /// One line of help for the current tool.
+    pub(crate) fn tool_hint(&self) -> String {
+        match &self.tool {
+            Tool::Select => {
+                "Select: click or drag a box; drag to move; right-click for a menu".to_string()
+            }
+            Tool::Poke => "Poke: click an input pin to flip it".to_string(),
+            Tool::Wire => "Wire: drag between dots to draw; double-click ends a chain; Esc cancels"
+                .to_string(),
+            Tool::Place(_, part) => {
+                format!("Place {part}: click to drop it, R rotates, right-click or Esc stops")
+            }
+        }
     }
 
     pub(crate) fn update_title(&mut self, ctx: &egui::Context) {

@@ -2,7 +2,9 @@ mod actions;
 mod analyze_ui;
 mod app;
 mod canvas;
+mod canvas_extras;
 mod catalog;
+mod diagnostics;
 mod dock;
 mod examples;
 mod fit;
@@ -33,6 +35,8 @@ fn main() -> eframe::Result {
             example = true;
         } else if a == "--palette" {
             dev.palette = true;
+        } else if a == "--minimap" {
+            dev.minimap = true;
         } else if a == "--shortcuts" {
             dev.shortcuts = true;
         } else if a == "--theme" {
