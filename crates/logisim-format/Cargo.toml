@@ -5,5 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+logisim-core = { path = "../logisim-core" }
+logisim-components = { path = "../logisim-components" }
 serde.workspace = true
 ron.workspace = true

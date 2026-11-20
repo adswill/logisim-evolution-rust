@@ -21,6 +21,8 @@ The Java reference lives (untracked) in `reference/logisim-evolution`; port **se
 ### Component contract (`logisim_core::Component`)
 - `ports()` returns ports for an **east-facing** component at origin (0,0); the circuit rotates them
   (`Direction::rotate`). By Logisim convention the output is at (0,0) and inputs are to the left (negative x).
+- `Component::tunnel_name` / `pull_value` are for Tunnel/Pull Resistor only. Bidirectional parts (splitters) use
+  `PortKind::InOut` and `ctx.port_value_others(i)` so they never read their own drive.
 - Port 0 is the primary output for gates; document your port order at the top of the file.
 - `propagate(ctx)` reads inputs with `ctx.port_value(i)` / `ctx.is_port_connected(i)` and drives outputs with
   `ctx.set_port(i, value, delay)` (delay >= 1 tick; gates use `gates::DELAY`). Never read time or other components.
@@ -32,6 +34,43 @@ The Java reference lives (untracked) in `reference/logisim-evolution`; port **se
 - Grid: positions are integer pixels on a 10-unit grid; keep ports on multiples of 10.
 - Values: use `Value`/`BitWidth`; X (unknown) and E (error) must behave as in Java `Value`. Width mismatch is
   reported by the circuit, don't special-case it.
+
+### Options and saving (required for every part)
+
+Parts are saved as `library` name + `part` name + `at` + `facing` + an **option map** (`OptionMap`, string keys to
+`Bool`/`Int`/`Str`). Implement both on your `Component`:
+
+```rust
+fn options(&self) -> OptionMap {
+    OptionMap::new().with("width", self.width.get()).with("mode", OptionMap::name_of(self.mode, &MODES))
+}
+fn set_options(&mut self, m: &OptionMap) -> Result<(), String> {
+    m.reject_unknown(&["width", "mode"])?;                       // typo protection
+    if let Some(v) = m.int("width", 1, 64)? { self.width = BitWidth::new(v as u8); }
+    self.mode = m.choice("mode", &MODES)?.unwrap_or(self.mode);  // absent key = keep default
+    Ok(())
+}
+```
+
+Rules:
+- Keys are `lower_snake_case`; enums are saved as lowercase names via a `const MODES: [(&str, Mode); N]` table.
+- `options()` must return **every** option (so a saved file is complete); `set_options` accepts absent keys.
+- `set_options` is called on a fresh `PartDesc::make()` part before `ports()` is read, so port layout may depend on options.
+- Validate ranges (`m.int(key, lo, hi)`), never panic on bad input; return `Err(message)`.
+- The registry `name` of a `PartDesc` must equal what the file stores as `part`. Never rename a released part
+  (it breaks saved files); add new names instead.
+- Add a test that `options()` → `set_options()` round-trips (see `every_part_round_trips_its_options` in `wiring.rs`).
+  Parts with no options need nothing (defaults are empty).
+
+## File format (`logisim-format`)
+
+`.rcirc` is RON: `ProjectFile { format_version, metadata, circuits, main }`. A circuit is `components`
+(`library`, `part`, `at`, `facing`, `options`), `wires` (`a`, `b`) and an optional `interface` (ports it exposes
+when used as a subcircuit). Subcircuit instances use `library: "Circuit"` and `part: "<circuit name>"`.
+`ProjectFile::instantiate(name)` builds a simulatable `Circuit`; each subcircuit instance gets its own state.
+Bump `FORMAT_VERSION` only for incompatible changes; new optional fields use `#[serde(default)]`.
+Tests for your library do not need the file format, but a round trip through `ComponentDef::new(lib, part, x, y)` +
+`ProjectFile::to_ron/parse/instantiate` is a good extra check.
 
 ## Where to port from (`reference/.../src/main/java/com/cburch/logisim/std/`)
 

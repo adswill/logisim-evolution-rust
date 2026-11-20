@@ -1784,11 +1784,16 @@ dependencies = [
 [[package]]
 name = "logisim-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "logisim-format"
 version = "0.1.0"
 dependencies = [
+ "logisim-components",
+ "logisim-core",
  "ron",
  "serde",
 ]
