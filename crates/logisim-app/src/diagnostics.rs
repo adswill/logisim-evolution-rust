@@ -6,7 +6,6 @@
 use crate::model::P;
 use crate::nets::NetAnalysis;
 use logisim_core::{BitWidth, Port, PortKind};
-use logisim_format::CircuitDef;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +192,7 @@ mod tests {
     use super::*;
     use crate::nets::HueMemory;
     use crate::sim::Sim;
-    use logisim_format::{ComponentDef, ProjectFile, WireDef};
+    use logisim_format::{CircuitDef, ComponentDef, ProjectFile, WireDef};
 
     struct Built {
         c: CircuitDef,
