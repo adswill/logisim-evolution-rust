@@ -13,6 +13,7 @@ use crate::registry::{Library, PartDesc};
 
 pub mod button;
 pub mod dip_switch;
+pub mod extra;
 pub mod joystick;
 pub mod keyboard;
 pub mod led;
@@ -23,6 +24,7 @@ pub mod tty;
 pub use button::{Button, ButtonPress};
 pub use dip_switch::{DipReset, DipSwitch, DipSwitchOptions};
 pub use joystick::Joystick;
+pub use extra::{Buzzer, MatrixKeypad, ProgrammableGenerator, Slider, Switch, TwoPinLed, TwoWaySwitch};
 pub use keyboard::{Keyboard, KeyboardData};
 pub use led::{Led, RgbLed};
 pub use matrix::{LedBar, LedMatrix, MatrixInput, MatrixOptions, MatrixState, SelectLoc};
@@ -65,6 +67,13 @@ pub fn library() -> Library {
             part("Hex Digit Display", || Box::new(HexDigit::new())),
             part("LED Matrix", || Box::new(LedMatrix::new(MatrixOptions::default()))),
             part("TTY", || Box::new(Tty::new(8, 32))),
+            part("Switch", || Box::new(Switch::new(1))),
+            part("Two-Way Switch", || Box::new(extra::TwoWaySwitch::new(extra::TwoWayMode::OneInTwoOut, 1))),
+            part("Slider", || Box::new(Slider::new(8))),
+            part("Two-Pin LED", || Box::new(TwoPinLed::new(false))),
+            part("Buzzer", || Box::new(Buzzer::new())),
+            part("Programmable Generator", || Box::new(ProgrammableGenerator::new(4))),
+            part("Matrix Keypad", || Box::new(MatrixKeypad::new(extra::KeypadSize::Normal))),
         ],
     }
 }

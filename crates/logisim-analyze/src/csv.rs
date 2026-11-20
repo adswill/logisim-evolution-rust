@@ -140,7 +140,10 @@ pub fn import(text: &str, input_columns: Option<usize>) -> Result<AnalyzerModel,
     let rows: Vec<(usize, Vec<String>)> = lines.map(|(n, l)| (n, split(l))).collect();
     let ncols = names.len();
     if ncols < 2 {
-        return err(hline, "a truth table needs at least one input and one output column");
+        return err(
+            hline,
+            "a truth table needs at least one input and one output column",
+        );
     }
     let n_in = match input_columns {
         Some(n) => n,
@@ -164,7 +167,13 @@ pub fn import(text: &str, input_columns: Option<usize>) -> Result<AnalyzerModel,
         );
     }
     if n_in > TruthTable::MAX_INPUTS {
-        return err(hline, format!("too many input columns (at most {})", TruthTable::MAX_INPUTS));
+        return err(
+            hline,
+            format!(
+                "too many input columns (at most {})",
+                TruthTable::MAX_INPUTS
+            ),
+        );
     }
     let in_vars = group_columns(&names[..n_in], hline)?;
     let out_vars = group_columns(&names[n_in..], hline)?;
@@ -184,7 +193,10 @@ pub fn import(text: &str, input_columns: Option<usize>) -> Result<AnalyzerModel,
     let mut table = model.table().clone();
     for (n, cells) in rows {
         if cells.len() != ncols {
-            return err(n, format!("expected {ncols} values but found {}", cells.len()));
+            return err(
+                n,
+                format!("expected {ncols} values but found {}", cells.len()),
+            );
         }
         let parse = |c: &String| -> Result<Option<bool>, CsvError> {
             match Entry::from_char(c.chars().next().unwrap_or('?')) {
@@ -195,7 +207,8 @@ pub fn import(text: &str, input_columns: Option<usize>) -> Result<AnalyzerModel,
                 None => err(n, format!("'{c}' should be 0, 1 or x")),
             }
         };
-        let pattern: Vec<Option<bool>> = cells[..n_in].iter().map(parse).collect::<Result<_, _>>()?;
+        let pattern: Vec<Option<bool>> =
+            cells[..n_in].iter().map(parse).collect::<Result<_, _>>()?;
         let outs: Vec<Option<bool>> = cells[n_in..].iter().map(parse).collect::<Result<_, _>>()?;
         for row in table.rows_matching(&pattern) {
             for (o, v) in outs.iter().enumerate() {
@@ -233,7 +246,11 @@ mod tests {
         let mut t = m.table().clone();
         for row in 0..8 {
             for o in 0..3 {
-                t.set(row, o, [Entry::Zero, Entry::One, Entry::DontCare][(row + 2 * o) % 3]);
+                t.set(
+                    row,
+                    o,
+                    [Entry::Zero, Entry::One, Entry::DontCare][(row + 2 * o) % 3],
+                );
             }
         }
         m.set_table(t);

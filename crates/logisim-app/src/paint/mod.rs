@@ -6,8 +6,11 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, Vec
 use logisim_core::{Direction, Port, Value};
 
 pub mod arith;
+pub mod base;
+pub mod bfh;
 pub mod block;
 pub mod gates;
+pub mod io;
 pub mod memory;
 pub mod plexers;
 pub mod ttl;
@@ -20,6 +23,7 @@ use logisim_format::ComponentDef;
 pub enum ThemeMode {
     Dark,
     Light,
+    HighContrast,
 }
 
 #[derive(Clone)]
@@ -61,6 +65,23 @@ impl Theme {
                 bus: Color32::from_rgb(120, 170, 255),
                 idle: Color32::from_rgb(150, 156, 168),
             },
+            ThemeMode::HighContrast => Theme {
+                dark: true,
+                bg: Color32::BLACK,
+                grid: Color32::from_rgb(52, 52, 52),
+                grid_major: Color32::from_rgb(96, 96, 96),
+                stroke: Color32::WHITE,
+                fill: Color32::from_rgb(10, 10, 10),
+                text: Color32::WHITE,
+                dim: Color32::from_rgb(200, 200, 200),
+                select: Color32::from_rgb(255, 214, 0),
+                v_true: Color32::from_rgb(0, 255, 128),
+                v_false: Color32::from_rgb(0, 170, 90),
+                v_x: Color32::from_rgb(130, 170, 255),
+                v_err: Color32::from_rgb(255, 70, 70),
+                bus: Color32::from_rgb(140, 190, 255),
+                idle: Color32::from_rgb(210, 210, 210),
+            },
             ThemeMode::Light => Theme {
                 dark: false,
                 bg: Color32::from_rgb(250, 250, 252),
@@ -69,14 +90,14 @@ impl Theme {
                 stroke: Color32::from_rgb(40, 44, 54),
                 fill: Color32::from_rgb(255, 255, 255),
                 text: Color32::from_rgb(30, 34, 44),
-                dim: Color32::from_rgb(120, 126, 140),
+                dim: Color32::from_rgb(84, 90, 104),
                 select: Color32::from_rgb(20, 110, 235),
                 v_true: Color32::from_rgb(0, 170, 70),
                 v_false: Color32::from_rgb(10, 100, 50),
                 v_x: Color32::from_rgb(70, 100, 190),
                 v_err: Color32::from_rgb(220, 40, 40),
                 bus: Color32::from_rgb(30, 80, 200),
-                idle: Color32::from_rgb(120, 126, 140),
+                idle: Color32::from_rgb(100, 106, 120),
             },
         }
     }
@@ -364,6 +385,9 @@ const LIBRARIES: &[(&str, LibraryPainters)] = &[
     ("Plexers", plexers::painter),
     ("Arithmetic", arith::painter),
     ("Memory", memory::painter),
+    ("Input/Output", io::painter),
+    ("BFH", bfh::painter),
+    ("Base", base::painter),
 ];
 
 pub fn painter_for(library: &str, part: &str) -> &'static dyn PartPainter {

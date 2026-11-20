@@ -1,9 +1,8 @@
 //! The Combinational Analysis window: edit a truth table or expressions, see the simplest
 //! expression and Karnaugh map, and build a circuit.
 //!
-//! Hooking it into the editor takes four small steps (see `App` in `app.rs`):
-//! keep an [`AnalyzerWindow`], call [`AnalyzerWindow::open`] from a menu item, call
-//! [`AnalyzerWindow::show`] once per frame, and apply the returned [`Action`].
+//! It is an [`AppWindow`](crate::windows::AppWindow); the editor lists it in the Window menu and
+//! the command palette. A circuit it builds is added to the project through the editor.
 
 mod expr_tab;
 mod pal;
@@ -12,20 +11,14 @@ mod state;
 mod table_tab;
 mod vars_panel;
 
+use crate::windows::{AppWindow, WindowEnv, WindowGroup};
 use eframe::egui::{self, RichText};
-use logisim_format::{CircuitDef, ProjectFile};
+use logisim_format::ProjectFile;
 use pal::Pal;
 use state::{Analyzer, Message, Tab};
 
-/// Something the window asks the editor to do.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Action {
-    /// Add this generated circuit to the project (rename it if the name is taken) and open it.
-    AddCircuit(CircuitDef),
-}
-
-pub struct AnalyzerWindow {
-    open: bool,
+#[derive(Default)]
+pub struct AnalysisWindow {
     st: Analyzer,
     vars: vars_panel::VarBuffers,
     exprs: expr_tab::ExprBuffers,
@@ -33,69 +26,31 @@ pub struct AnalyzerWindow {
     csv_pending: Option<(String, usize)>,
 }
 
-impl Default for AnalyzerWindow {
-    fn default() -> Self {
-        Self::new()
+impl AppWindow for AnalysisWindow {
+    fn id(&self) -> &'static str {
+        "analysis"
+    }
+    fn title(&self) -> &str {
+        "Combinational Analysis"
+    }
+    fn group(&self) -> WindowGroup {
+        WindowGroup::Tools
+    }
+    fn description(&self) -> &str {
+        "Truth tables, expressions, Karnaugh maps and building circuits from them."
+    }
+    fn default_size(&self) -> [f32; 2] {
+        [1000.0, 640.0]
+    }
+    fn show(&mut self, ui: &mut egui::Ui, env: &mut WindowEnv) {
+        let pal = Pal::new(ui.visuals().dark_mode);
+        self.contents(ui, &pal, env);
     }
 }
 
-impl AnalyzerWindow {
-    pub fn new() -> Self {
-        AnalyzerWindow {
-            open: false,
-            st: Analyzer::new(),
-            vars: Default::default(),
-            exprs: Default::default(),
-            csv_pending: None,
-        }
-    }
-
-    /// Show the window (a menu item calls this).
-    pub fn open(&mut self) {
-        self.open = true;
-    }
-
-    #[cfg(test)]
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    /// Draw the window if it is open. `current` names the circuit being edited, which the
-    /// "Read from circuit" button analyses.
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        dark: bool,
-        project: &ProjectFile,
-        current: &str,
-    ) -> Option<Action> {
-        if !self.open {
-            return None;
-        }
-        let pal = Pal::new(dark);
-        let mut open = true;
-        let mut action = None;
-        egui::Window::new("Combinational Analysis")
-            .open(&mut open)
-            .default_size([1000.0, 640.0])
-            .min_size([640.0, 420.0])
-            .resizable(true)
-            .show(ctx, |ui| {
-                action = self.contents(ui, &pal, project, current);
-            });
-        self.open = open;
-        action
-    }
-
-    fn contents(
-        &mut self,
-        ui: &mut egui::Ui,
-        pal: &Pal,
-        project: &ProjectFile,
-        current: &str,
-    ) -> Option<Action> {
-        let mut action = None;
-        self.toolbar(ui, project, current);
+impl AnalysisWindow {
+    fn contents(&mut self, ui: &mut egui::Ui, pal: &Pal, env: &mut WindowEnv) {
+        self.toolbar(ui, &env.editor.project, &env.editor.current.clone());
         self.csv_dialog(ui);
         if let Some(m) = &self.st.message {
             let (text, colour) = match m {
@@ -118,7 +73,7 @@ impl AnalyzerWindow {
         egui::Panel::bottom("analysis_build")
             .resizable(false)
             .show(ui, |ui| {
-                action = self.build_bar(ui, pal);
+                self.build_bar(ui, pal, env);
             });
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -137,7 +92,6 @@ impl AnalyzerWindow {
                 Tab::Simplified => simplified_tab::show(ui, &mut self.st, pal),
             }
         });
-        action
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, project: &ProjectFile, current: &str) {
@@ -269,8 +223,7 @@ impl AnalyzerWindow {
         }
     }
 
-    fn build_bar(&mut self, ui: &mut egui::Ui, pal: &Pal) -> Option<Action> {
-        let mut action = None;
+    fn build_bar(&mut self, ui: &mut egui::Ui, pal: &Pal, env: &mut WindowEnv) {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Build circuit").strong());
@@ -278,54 +231,73 @@ impl AnalyzerWindow {
             ui.add(egui::TextEdit::singleline(&mut self.st.build.name).desired_width(120.0));
             ui.checkbox(&mut self.st.build.two_input_only, "Two-input gates only");
             ui.checkbox(&mut self.st.build.nand_only, "NAND gates only");
+            let fill = pal
+                .accent
+                .gamma_multiply(if pal.dark { 0.45 } else { 0.25 });
             if ui
                 .add(
-                    egui::Button::new(RichText::new("Create circuit").strong()).fill(
-                        pal.accent
-                            .gamma_multiply(if pal.dark { 0.45 } else { 0.25 }),
-                    ),
+                    egui::Button::new(RichText::new("Create circuit").strong())
+                        .fill(fill)
+                        .min_size(egui::vec2(0.0, crate::style::MIN_TARGET)),
                 )
                 .on_hover_text(
                     "Adds a new circuit to your project with one pin per input and output bit",
                 )
                 .clicked()
             {
-                match self.st.build_circuit() {
-                    Ok((def, summary)) => {
-                        self.st.message = Some(Message::Info(format!(
-                            "Created circuit “{}” ({summary})",
-                            def.name
-                        )));
-                        action = Some(Action::AddCircuit(def));
-                    }
-                    Err(e) => self.st.message = Some(Message::Error(e)),
-                }
+                self.create_circuit(env);
             }
         });
-        action
+    }
+
+    /// Build the circuit from the current table and add it to the project (opening it).
+    fn create_circuit(&mut self, env: &mut WindowEnv) {
+        match self.st.build_circuit() {
+            Ok((def, summary)) => {
+                let name = env.editor.add_circuit_def(def);
+                env.editor.open_circuit(&name);
+                self.st.message = Some(Message::Info(format!(
+                    "Created circuit “{name}” ({summary})"
+                )));
+                *env.status = format!("Added circuit '{name}' from the analysis window.");
+            }
+            Err(e) => self.st.message = Some(Message::Error(e)),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Editor;
+    use crate::windows::Windows;
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Vec2};
+    use logisim_analyze::var::Var;
 
-    fn run_frame(
-        w: &mut AnalyzerWindow,
+    fn frame(
+        w: &mut AnalysisWindow,
         ctx: &egui::Context,
+        editor: &mut Editor,
         input: RawInput,
         dark: bool,
-    ) -> Option<Action> {
-        let project = ProjectFile::new("p", "main");
-        let mut out = None;
-        let mut full = ctx.run_ui(input, |ctx| {
-            if let Some(a) = w.show(ctx, dark, &project, "main") {
-                out = Some(a);
-            }
+    ) {
+        ctx.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        let mut status = String::new();
+        let mut full = ctx.run_ui(input, |ui| {
+            let mut env = WindowEnv {
+                editor: &mut *editor,
+                sim: None,
+                status: &mut status,
+            };
+            egui::Window::new("t")
+                .default_size([1000.0, 640.0])
+                .show(ui, |ui| w.show(ui, &mut env));
         });
         full.textures_delta.clear();
-        out
     }
 
     fn input() -> RawInput {
@@ -339,15 +311,15 @@ mod tests {
     }
 
     #[test]
-    fn closed_window_draws_nothing_and_opens_on_request() {
-        let ctx = egui::Context::default();
-        let mut w = AnalyzerWindow::new();
-        assert!(!w.is_open());
-        assert!(run_frame(&mut w, &ctx, input(), true).is_none());
-        w.open();
-        assert!(w.is_open());
-        run_frame(&mut w, &ctx, input(), true);
-        assert!(w.is_open());
+    fn is_registered_in_the_tools_group() {
+        let w = Windows::default();
+        let a = w
+            .list
+            .iter()
+            .find(|w| w.id() == "analysis")
+            .expect("registered");
+        assert_eq!(a.group(), WindowGroup::Tools);
+        assert!(!a.description().is_empty());
     }
 
     #[test]
@@ -355,12 +327,12 @@ mod tests {
         for dark in [true, false] {
             for tab in [Tab::Table, Tab::Expressions, Tab::Simplified] {
                 let ctx = egui::Context::default();
-                let mut w = AnalyzerWindow::new();
-                w.open();
+                let mut ed = Editor::new();
+                let mut w = AnalysisWindow::default();
                 w.st.tab = tab;
                 w.st.set_expression_text(0, "A ^ B");
                 for _ in 0..3 {
-                    run_frame(&mut w, &ctx, input(), dark);
+                    frame(&mut w, &ctx, &mut ed, input(), dark);
                 }
             }
         }
@@ -369,9 +341,9 @@ mod tests {
     #[test]
     fn tabs_draw_for_awkward_tables() {
         let ctx = egui::Context::default();
-        let mut w = AnalyzerWindow::new();
-        w.open();
-        // no outputs, then no inputs, then many inputs, then a 6-input map with buses
+        let mut ed = Editor::new();
+        let mut w = AnalysisWindow::default();
+        // no outputs, no inputs, many inputs, and a 5-input map with a bus output
         for setup in 0..4 {
             let mut st = Analyzer::new();
             match setup {
@@ -381,19 +353,11 @@ mod tests {
                     st.remove_var(state::Side::Input, "B");
                 }
                 2 => st
-                    .replace_var(
-                        state::Side::Input,
-                        "A",
-                        logisim_analyze::var::Var::new("A", 9),
-                    )
+                    .replace_var(state::Side::Input, "A", Var::new("A", 9))
                     .unwrap(),
                 _ => {
-                    st.replace_var(
-                        state::Side::Input,
-                        "A",
-                        logisim_analyze::var::Var::new("A", 5),
-                    )
-                    .unwrap();
+                    st.replace_var(state::Side::Input, "A", Var::new("A", 5))
+                        .unwrap();
                     st.add_var(state::Side::Output, "Q[1..0]").unwrap();
                     st.set_expression_text(1, "A[4] A[0] + B");
                 }
@@ -401,7 +365,7 @@ mod tests {
             w.st = st;
             for tab in [Tab::Table, Tab::Expressions, Tab::Simplified] {
                 w.st.tab = tab;
-                run_frame(&mut w, &ctx, input(), true);
+                frame(&mut w, &ctx, &mut ed, input(), true);
             }
         }
     }
@@ -409,34 +373,66 @@ mod tests {
     #[test]
     fn expression_errors_are_drawn() {
         let ctx = egui::Context::default();
-        let mut w = AnalyzerWindow::new();
-        w.open();
+        let mut ed = Editor::new();
+        let mut w = AnalysisWindow::default();
         w.st.tab = Tab::Expressions;
         w.st.set_expression_text(0, "A +");
-        run_frame(&mut w, &ctx, input(), true);
+        frame(&mut w, &ctx, &mut ed, input(), true);
         assert!(w.st.expr_problems[0].is_some());
     }
 
     #[test]
-    fn clicking_create_circuit_returns_the_action() {
-        let ctx = egui::Context::default();
-        let mut w = AnalyzerWindow::new();
-        w.open();
+    fn creating_a_circuit_adds_it_to_the_project_and_opens_it() {
+        let mut ed = Editor::new();
+        let before = ed.project.circuits.len();
+        let mut w = AnalysisWindow::default();
         w.st.set_expression_text(0, "A B");
-        // find the button by clicking where egui laid it out: run once to learn nothing, so drive
-        // the state function directly instead and check the action shape
-        let (def, _) = w.st.build_circuit().unwrap();
-        let a = Action::AddCircuit(def.clone());
-        assert_eq!(a, Action::AddCircuit(def));
-        run_frame(&mut w, &ctx, input(), false);
+        let mut status = String::new();
+        let mut env = WindowEnv {
+            editor: &mut ed,
+            sim: None,
+            status: &mut status,
+        };
+        w.create_circuit(&mut env);
+        assert_eq!(ed.project.circuits.len(), before + 1);
+        assert_eq!(ed.current, "Analyzed");
+        assert!(status.contains("Analyzed"));
+        // a second build gets its own name instead of overwriting
+        let mut env = WindowEnv {
+            editor: &mut ed,
+            sim: None,
+            status: &mut status,
+        };
+        w.create_circuit(&mut env);
+        assert_eq!(ed.project.circuits.len(), before + 2);
+        assert_ne!(ed.current, "Analyzed");
+        // the generated circuit simulates: it has the labelled pins as its interface
+        assert_eq!(ed.circuit().interface.len(), 3);
+    }
+
+    #[test]
+    fn building_without_outputs_reports_an_error_and_changes_nothing() {
+        let mut ed = Editor::new();
+        let before = ed.project.circuits.len();
+        let mut w = AnalysisWindow::default();
+        w.st.remove_var(state::Side::Output, "Y");
+        let mut status = String::new();
+        let mut env = WindowEnv {
+            editor: &mut ed,
+            sim: None,
+            status: &mut status,
+        };
+        w.create_circuit(&mut env);
+        assert_eq!(ed.project.circuits.len(), before);
+        assert!(matches!(w.st.message, Some(Message::Error(_))));
     }
 
     #[test]
     fn pointer_events_do_not_break_the_window() {
         let ctx = egui::Context::default();
-        let mut w = AnalyzerWindow::new();
-        w.open();
-        run_frame(&mut w, &ctx, input(), true);
+        let mut ed = Editor::new();
+        let mut w = AnalysisWindow::default();
+        frame(&mut w, &ctx, &mut ed, input(), true);
         let mut i = input();
         i.events.push(Event::PointerMoved(Pos2::new(600.0, 300.0)));
         i.events.push(Event::PointerButton {
@@ -445,6 +441,6 @@ mod tests {
             pressed: true,
             modifiers: Modifiers::NONE,
         });
-        run_frame(&mut w, &ctx, i, true);
+        frame(&mut w, &ctx, &mut ed, i, true);
     }
 }

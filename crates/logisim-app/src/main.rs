@@ -1,20 +1,46 @@
+mod actions;
 mod analyze_ui;
 mod app;
+mod canvas;
+mod catalog;
+mod dock;
 mod examples;
+mod fit;
+mod fuzzy;
+mod log_ui;
 mod model;
 mod nets;
 mod numfmt;
+mod overlays;
 mod paint;
+mod palette;
+mod panels;
+mod prefs;
 mod sim;
+mod style;
+mod windows;
 
 use eframe::egui;
 
 fn main() -> eframe::Result {
     let mut file = None;
     let mut example = false;
-    for a in std::env::args().skip(1) {
+    let mut dev = app::DevFlags::default();
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
         if a == "--example" {
             example = true;
+        } else if a == "--palette" {
+            dev.palette = true;
+        } else if a == "--shortcuts" {
+            dev.shortcuts = true;
+        } else if a == "--theme" {
+            dev.theme = match args.next().as_deref() {
+                Some("light") => Some(prefs::ThemeChoice::Light),
+                Some("dark") => Some(prefs::ThemeChoice::Dark),
+                Some("hc") => Some(prefs::ThemeChoice::HighContrast),
+                _ => None,
+            };
         } else {
             file = Some(std::path::PathBuf::from(a));
         }
@@ -28,6 +54,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "rcirc",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(&cc.egui_ctx, file, example)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(&cc.egui_ctx, file, example, &dev)))),
     )
 }

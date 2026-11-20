@@ -11,17 +11,16 @@ struct BlockPainter {
     symbol: &'static str,
     /// Label per port index (`""` = none).
     labels: &'static [&'static str],
-    fp: bool,
 }
 
 macro_rules! b {
     ($sym:expr, [$($l:expr),*]) => {
-        &BlockPainter { symbol: $sym, labels: &[$($l),*], fp: false }
+        &BlockPainter { symbol: $sym, labels: &[$($l),*] }
     };
 }
 macro_rules! fp {
     ($sym:expr, [$($l:expr),*]) => {
-        &BlockPainter { symbol: $sym, labels: &[$($l),*], fp: true }
+        &BlockPainter { symbol: $sym, labels: &[$($l),*] }
     };
 }
 

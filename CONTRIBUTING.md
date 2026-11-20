@@ -115,6 +115,36 @@ pub trait PartPainter {
 - Keep painting pure and cheap (no allocation-heavy work per frame) and never panic on odd options.
 - Verify visually: run `cargo run -p rcirc --release -- --example`, place your part from the toolbox, rotate it with `R`.
 
+### App windows (`crates/logisim-app/src/windows.rs`)
+
+Tools such as the analysis window, timing diagram, hex editor or statistics plug in as **app windows**: implement
+`AppWindow` and add ONE line to `registered_windows()`. The editor lists the window in the *Window* menu (grouped by
+`group()`), in the command palette ("Window: <title>") and draws it as a floating, closable egui window.
+
+```rust
+pub trait AppWindow {
+    fn id(&self) -> &'static str;                 // stable unique id, e.g. "analysis"
+    fn title(&self) -> &str;                      // window title and menu text
+    fn group(&self) -> WindowGroup { WindowGroup::Tools }       // Project | Simulate | Tools
+    fn description(&self) -> &str { "" }          // tooltip / palette detail
+    fn show(&mut self, ui: &mut egui::Ui, env: &mut WindowEnv); // contents, every frame while open
+    fn update(&mut self, _env: &mut WindowEnv) {} // optional, every frame while open, before `show`
+    fn default_size(&self) -> [f32; 2] { [520.0, 420.0] }
+}
+pub struct WindowEnv<'a> {
+    pub editor: &'a mut Editor,        // project data, open circuit, selection, undoable edit methods
+    pub sim: Option<&'a mut Sim>,      // live simulation of the open circuit (None when off)
+    pub status: &'a mut String,        // status-bar message
+}
+// registration, in windows.rs:
+//     reg.push(Box::new(my_module::MyWindow::default()));
+```
+
+- Put your window in its own module (`windows/<name>.rs` or a new file) and keep logic that does not need egui in
+  plain, tested functions (see `ProjectStats`).
+- Change the circuit only through `Editor` methods so edits stay undoable. Do not keep references into `env` across frames.
+- Use `crate::style::MIN_TARGET` for clickable controls and never rely on colour alone to convey state.
+
 ## File format (`logisim-format`)
 
 `.rcirc` is RON: `ProjectFile { format_version, metadata, circuits, main }`. A circuit is `components`
